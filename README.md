@@ -1,39 +1,40 @@
 - [English](README.md)
 - [简体中文](README.zh-CN.md)
 
-An easy-to-use web interface for Aria2 and youtube-dl
+# NCDownloader
 
-- Search for torrents within the app from mutiple BT sites
-- Control Aria2 and manage download tasks from the web;
-- Harnessing the power of youtube-dl to download videos from 700+ video sites(youtube,youku,dailymotion,twitter,facebook and the likes;
+An easy-to-use web interface for Aria2 and yt-dlp in Nextcloud (compatible with **Nextcloud 28 - 35** and **PHP 8.1 - 8.5**).
+
+- Control Aria2 and manage HTTP(S), FTP(S), Magnet and BitTorrent downloads from the web interface
+- Download videos and audio tracks from hundreds of platforms via **yt-dlp** (with fallback to `youtube-dl`)
+- Automatic Nextcloud Files indexing as soon as downloads complete (no manual `occ files:scan` required)
+- Built-in torrent search across supported providers
+
 <img width="800" alt="nc2" src="https://user-images.githubusercontent.com/3911975/132008308-dec2a7ba-4387-441e-9ded-538d61fbccf0.png">
 <img width="800" alt="nc4" src="https://user-images.githubusercontent.com/3911975/142444998-54dd54a6-0c8e-4d49-8188-270964a99c50.png">
 <img width="800" alt="nc5" src="https://user-images.githubusercontent.com/3911975/142445020-27ec389a-5437-4d28-acc0-5e757fd6897d.png">
 
-### How to use
+### Requirements and installation
 
-NCDownloader has included both yt-dlp(faster version of youtube-dl) and aria2c and there is no need for manual installation under normal circumstances (*tested it successfully with snap version of nextcloud both in centos7 and ubuntu 20.04*)   
-But if for some reason,the builtin binaries don't work for you, then you will need to install them yourself
+Install `aria2` and `yt-dlp` on the Nextcloud host (or container):
 
-#### installing aria2 and yt-dlp in ubuntu
 ```bash
-sudo apt install aria2
-sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/download/2022.05.18/yt-dlp 4 -o /usr/local/bin/youtube-dl
-sudo chmod a+rx /usr/local/bin/youtube-dl
+sudo apt-get update && sudo apt-get install -y aria2 ffmpeg python3
+sudo curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+sudo chmod 0755 /usr/local/bin/yt-dlp
 ```
-Also, if you don't want to use the builtin versions, you can always force the app use a specific version by setting the binary path manually. In that case, the app will not try to find youtube-dl binary in your system, and the built-in ones will be ignored as well. 
+
+You can also configure a custom binary path in **Administration settings -> NCDownloader**.
 
 ### How to build front-end code
 
-NPM 7.0+ and node 14.0.0+ are required to build front-end scripts
+Node.js 20+ and npm 10+ are recommended to build the front-end bundles:
 
 ```bash
-#start to build
+npm install --legacy-peer-deps
 npm run build
-
-#installing php dependencies
-composer install
 ```
 
-#### Nextcloud App homepage
-https://apps.nextcloud.com/apps/ncdownloader
+### Repository
+
+https://github.com/eldertek/ncdownloader

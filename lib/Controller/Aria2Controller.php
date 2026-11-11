@@ -1,280 +1,320 @@
 <?php
+
 namespace OCA\NCDownloader\Controller;
 
+use OCA\NCDownloader\AppInfo\Application;
 use OCA\NCDownloader\Aria2\Aria2;
-use OCA\NCDownloader\Tools\Counters;
 use OCA\NCDownloader\Db\Helper as DbHelper;
+use OCA\NCDownloader\Tools\Counters;
 use OCA\NCDownloader\Tools\folderScan;
 use OCA\NCDownloader\Tools\Helper;
 use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\JSONResponse;
+use OCP\Files\Folder;
 use OCP\Files\IRootFolder;
 use OCP\IL10N;
 use OCP\IRequest;
-use \OC\Files\Filesystem;
+use OCP\IURLGenerator;
+use OCP\IUserSession;
 
 class Aria2Controller extends Controller
 {
-    private $uid;
-    private $settings = null;
-    //@config OC\AppConfig
-    private $config;
-    private $l10n;
-    private $minmax = [-1, 999];
-    private $aria2;
-    private $dbconn;
-    private $counters;
-    private $rootFolder;
-    private $downloadDir;
-    private $urlGenerator;
-    public function __construct($appName, IRequest $request, $UserId, IL10N $IL10N, IRootFolder $rootFolder, Aria2 $aria2)
-    {
-        parent::__construct($appName, $request);
-        $this->uid = $UserId;
-        $this->l10n = $IL10N;
+    private string $uid;
+    private IL10N $l10n;
+    private array $minmax = [-1, 999];
+    private Aria2 $aria2;
+    private DbHelper $dbconn;
+    private Counters $counters;
+    private IRootFolder $rootFolder;
+    private string $downloadDir;
+    private IURLGenerator $urlGenerator;
+
+    public function __construct(
+        IRequest $request,
+        IUserSession $userSession,
+        IL10N $l10n,
+        IRootFolder $rootFolder,
+        IURLGenerator $urlGenerator,
+        Aria2 $aria2
+    ) {
+        parent::__construct(Application::APP_ID, $request);
+        $user = $userSession->getUser();
+        $this->uid = $user ? $user->getUID() : '';
+        $this->l10n = $l10n;
         $this->rootFolder = $rootFolder;
-        $this->urlGenerator = \OC::$server->get(\OCP\IURLGenerator::class);
-        $this->downloadDir = Helper::getDownloadDir();
-        \OC_Util::setupFS();
-        //$this->config = \OC::$server->getAppConfig();
+        $this->urlGenerator = $urlGenerator;
+        $this->downloadDir = Helper::getDownloadDir($this->uid);
         $this->aria2 = $aria2;
         $this->aria2->init();
         $this->dbconn = new DbHelper();
-        $this->counters = new Counters($aria2, $this->dbconn, $UserId);
-       
+        $this->counters = new Counters($aria2, $this->dbconn, $this->uid);
     }
+
     /**
      * @NoAdminRequired
      */
-    public function Action($path)
+    #[NoAdminRequired]
+    public function Action(string $path): JSONResponse
     {
         $path = strtolower(trim($path));
         $resp = [];
+        $gid = (string) ($this->request->getParam('gid') ?? '');
 
-        if (!in_array($path, ['start', 'check']) && !($gid = $this->request->getParam('gid'))) {
-            return new JSONResponse(['error' => "no gid value is received!"]);
+        if (!in_array($path, ['start', 'check'], true)) {
+            if ($gid === '') {
+                return new JSONResponse(['error' => 'No gid value received']);
+            }
+            if ($this->dbconn->getUidByGid($gid) !== $this->uid && !Helper::isAdmin($this->uid)) {
+                return new JSONResponse(['error' => 'Forbidden'], 403);
+            }
         }
-        switch (strtolower($path)) {
-            case "check":
+
+        switch ($path) {
+            case 'check':
                 $resp = $this->aria2->isRunning();
                 break;
-            case "start":
+            case 'start':
+                if (!Helper::isAdmin($this->uid)) {
+                    return new JSONResponse(['error' => 'Admin access required'], 403);
+                }
                 $resp = $this->Start();
                 break;
-            case "unpause":
-            case "remove":
-            case "pause":
+            case 'unpause':
+            case 'remove':
+            case 'pause':
                 $resp = $this->doAction($path, $gid);
-                if ($path === "remove" && isset($resp['status']) && $resp['status']) {
+                if ($path === 'remove' && !empty($resp['status'])) {
                     $this->dbconn->deleteByGid($gid);
                 }
                 break;
-            case "get":
+            case 'get':
                 $resp = $this->doAction('tellStatus', $gid);
                 break;
             case 'purge':
                 $resp = $this->doAction('removeDownloadResult', $gid);
-                if (isset($resp['status']) && $resp['status']) {
+                if (!empty($resp['status'])) {
                     $this->dbconn->deleteByGid($gid);
                 }
+                break;
         }
         return new JSONResponse($resp);
     }
 
-    private function doAction($action, $gid)
+    private function doAction(string $action, string $gid): array
     {
-        if (!$action || !$gid) {
+        if ($action === '' || $gid === '') {
             return [];
         }
         $resp = $this->aria2->{$action}($gid);
-        if (isset($resp['result'])) {
+        if (is_array($resp) && isset($resp['result'])) {
             switch ($action) {
-                case "pause":
+                case 'pause':
                     $this->dbconn->updateStatus($gid, Helper::STATUS['PAUSED']);
                     break;
-                case "unpause":
-                    $this->dbconn->updateStatus($gid);
+                case 'unpause':
+                    $this->dbconn->updateStatus($gid, Helper::STATUS['ACTIVE']);
                     break;
             }
         }
-        if (in_array($action, ['removeDownloadResult', 'remove'])) {
-            $result = $resp['result'] ?? null;
-            if (isset($result)) {
-                if (strtolower($result) === 'ok') {
-                    return ['message' => $this->l10n->t("DONE!"), 'status' => 1];
-                }
-                if (is_string($result)) {
-                    return ['message' => $this->l10n->t("DONE!"), 'status' => 1];
-                }
-            } else {
-                return ['error' => $this->l10n->t("FAILED!"), 'status' => 0];
+        if (in_array($action, ['removeDownloadResult', 'remove'], true)) {
+            $result = is_array($resp) ? ($resp['result'] ?? null) : null;
+            if ($result !== null && is_string($result)) {
+                return ['message' => $this->l10n->t('DONE!'), 'status' => 1];
             }
+            return ['error' => $this->l10n->t('FAILED!'), 'status' => 0];
         }
-        return $resp;
-
+        return is_array($resp) ? $resp : [];
     }
-    private function Start()
+
+    private function Start(): array
     {
         if ($this->aria2->isRunning()) {
-            $data = ['status' => (bool) $this->aria2->stop()];
-            return $data;
+            return ['status' => (bool) $this->aria2->stop()];
         }
-        $data = $this->aria2->start();
-        return $data;
+        return $this->aria2->start();
     }
 
-    private function createActionItem($name, $path)
+    private function createActionItem(string $name, string $path): array
     {
-        return array(
+        return [
             'name' => $name,
             'path' => $this->urlGenerator->linkToRoute('ncdownloader.Aria2.Action', ['path' => $path]),
-        );
+        ];
     }
+
     /**
      * @NoAdminRequired
      */
-    public function getStatus($path)
+    #[NoAdminRequired]
+    public function getStatus(string $path): JSONResponse
     {
-        //$path = $this->request->getRequestUri();
         $counter = $this->counters->getCounters();
-        folderScan::sync();
+        folderScan::sync(false, $this->uid);
+
         switch (strtolower($path)) {
-            case "active":
+            case 'active':
                 $resp = $this->aria2->tellActive();
                 break;
-            case "waiting":
+            case 'waiting':
                 $resp = $this->aria2->tellWaiting($this->minmax);
                 break;
-            case "complete":
+            case 'complete':
                 $resp = $this->aria2->tellStopped($this->minmax);
                 break;
-            case "fail":
+            case 'fail':
                 $resp = $this->aria2->tellFail($this->minmax);
                 break;
             default:
                 $resp = $this->aria2->tellActive();
         }
-        if (isset($resp['error'])) {
+        if (is_array($resp) && isset($resp['error'])) {
             return new JSONResponse($resp);
         }
-        $data = $this->transformResp($resp);
+        $data = $this->transformResp(is_array($resp) ? $resp : []);
         $data['counter'] = $counter;
         return new JSONResponse($data);
     }
-    private function transformResp($resp)
-    {
 
+    private function transformResp(array $resp): array
+    {
         $data = [];
         if (empty($resp)) {
             return $data;
         }
         $data['row'] = [];
         $resp = $this->filterData($resp);
-        foreach ($resp as $value) {
 
-            $gid = $value['following'] ?? $value['gid'];
-            if ($row = $this->dbconn->getByGid($gid)) {
-                $filename = $row['filename'];
-                $timestamp = $row['timestamp'];
-                $extra = $this->dbconn->getExtra(($row['data']));
-            } else if (isset($value['files'][0]['path'])) {
-                $parts = explode("/", ($path = $value['files'][0]['path']));
-                if (count($parts) > 1) {
-                    $filename = basename(dirname($path));
-                } else {
-                    $filename = basename($path);
-                }
-            } else {
-                $filename = "Unknown";
+        $userFolder = null;
+        if ($this->uid !== '') {
+            try {
+                $userFolder = $this->rootFolder->getUserFolder($this->uid);
+            } catch (\Throwable $e) {
+                $userFolder = null;
             }
+        }
+
+        foreach ($resp as $value) {
+            if (!is_array($value)) {
+                continue;
+            }
+            $gid = (string) ($value['following'] ?? $value['gid'] ?? '');
+            $timestamp = 0;
+            $extra = [];
+            $rawFilename = 'Unknown';
+
+            $row = $gid !== '' ? $this->dbconn->getByGid($gid) : false;
+            if (is_array($row)) {
+                $rawFilename = (string) ($row['filename'] ?? 'Unknown');
+                $timestamp = (int) ($row['timestamp'] ?? 0);
+                $extra = $this->dbconn->getExtra($row['data'] ?? null);
+            }
+            if (($rawFilename === '' || strtolower($rawFilename) === 'unknown') && !empty($value['files'][0]['path'])) {
+                $filePath = (string) $value['files'][0]['path'];
+                $rawFilename = basename($filePath);
+                if ($gid !== '' && $rawFilename !== '') {
+                    $this->dbconn->updateFilename($gid, $rawFilename, true);
+                }
+            }
+
             if (!isset($value['completedLength'])) {
                 continue;
             }
-            //internal nextcloud absolute path for nodeExists
-            //$file = $this->userFolder . $this->downloadDir . "/" . $filename;
-            // $dir = $this->rootFolder->nodeExists($file) ? $this->downloadDir . "/" . $filename : $this->downloadDir;
-            $dlDir = $extra['path'] ?? $this->downloadDir;
-            $file = $dlDir. "/" . $filename;
+
+            $dlDir = (string) ($extra['path'] ?? $this->downloadDir);
+            $relItemPath = trim($dlDir, '/') . '/' . $rawFilename;
+
+            // Ensure completed files are indexed into Nextcloud Files cache immediately
+            if (strtolower((string) ($value['status'] ?? '')) === 'complete' && $userFolder !== null && $rawFilename !== 'Unknown') {
+                if (!$userFolder->nodeExists($relItemPath)) {
+                    folderScan::scanTarget($this->uid, $dlDir, $rawFilename);
+                }
+            }
+
             $params = ['dir' => $dlDir];
-            $fileInfo = Filesystem::getFileInfo($file);
-            if ($fileInfo) {
-                $fileType = $fileInfo->getType();
-                if ($fileType === "dir") {
-                    $params = ['dir' => $file];
+            if ($userFolder !== null && $userFolder->nodeExists($relItemPath)) {
+                try {
+                    $node = $userFolder->get($relItemPath);
+                    if ($node instanceof Folder) {
+                        $params = ['dir' => '/' . $relItemPath];
+                    }
+                } catch (\Throwable $e) {
                 }
             }
             $folderLink = $this->urlGenerator->linkToRoute('files.view.index', $params);
-            //$peers = ($this->getPeers($info['gid']));
-            $completed = Helper::formatBytes($value['completedLength']);
-            $percentage = $value['completedLength'] ? 100 * ($value['completedLength'] / $value['totalLength']) : 0;
-            $completed = Helper::formatBytes($value['completedLength']);
 
-            $total = Helper::formatBytes($value['totalLength']);
+            $completedBytes = (float) ($value['completedLength'] ?? 0);
+            $totalBytes = (float) ($value['totalLength'] ?? 0);
+            $dlSpeed = (float) ($value['downloadSpeed'] ?? 0);
 
-            $remaining = (int) $value['totalLength'] - (int) $value['completedLength'];
-            $remaining = ($value['downloadSpeed'] > 0) ? ($remaining / $value['downloadSpeed']) : 0;
-            $left = Helper::formatInterval($remaining);
+            $completed = Helper::formatBytes($completedBytes);
+            $percentage = $totalBytes > 0 ? 100.0 * ($completedBytes / $totalBytes) : 0.0;
+            $total = Helper::formatBytes($totalBytes);
 
-            $numSeeders = $value['numSeeders'] ?? 0;
-            $upload = $value['uploadLength'] ?? 0;
-            $upload = Helper::formatBytes($upload);
+            $remainingBytes = max(0.0, $totalBytes - $completedBytes);
+            $remainingSec = $dlSpeed > 0 ? ($remainingBytes / $dlSpeed) : 0;
+            $left = Helper::formatInterval($remainingSec);
+
+            $numSeeders = (int) ($value['numSeeders'] ?? 0);
+            $upload = Helper::formatBytes((float) ($value['uploadLength'] ?? 0));
             $extraInfo = "Seeders: $numSeeders|Up:$upload";
-            // $numPeers = isset($peers['result']) ? count($peers['result']) : 0;
-            $value['progress'] = array(sprintf("%s(%.2f%%)", $completed, $percentage), $extraInfo);
-            $timestamp = $timestamp ?? 0;
-            //$prefix = $value['files'][0]['path'];
+            $progressDisplay = [sprintf('%s(%.2f%%)', $completed, $percentage), $extraInfo];
+
+            $safeHref = htmlspecialchars($folderLink, ENT_QUOTES, 'UTF-8');
+            $safeName = htmlspecialchars($rawFilename, ENT_QUOTES, 'UTF-8');
+            $safeLink = htmlspecialchars((string) ($extra['link'] ?? 'nolink'), ENT_QUOTES, 'UTF-8');
+
             $tmp = [];
             $actions = [];
-            $filename = sprintf('<a class="download-file-folder" href="%s">%s</a>', $folderLink, $filename);
-            $fileInfo = sprintf('<button id="icon-clipboard" class="icon-clipboard" data-text="%s"></button> %s | %s', $extra["link"] ?? 'nolink', $total, date("Y-m-d H:i:s", $timestamp));
-            $tmp['filename'] = array($filename, $fileInfo);
+            $filenameHtml = sprintf('<a class="download-file-folder" href="%s">%s</a>', $safeHref, $safeName);
+            $fileInfoHtml = sprintf(
+                '<button id="icon-clipboard" class="icon-clipboard" data-text="%s"></button> %s | %s',
+                $safeLink,
+                htmlspecialchars($total, ENT_QUOTES, 'UTF-8'),
+                date('Y-m-d H:i:s', $timestamp > 0 ? $timestamp : time())
+            );
+            $tmp['filename'] = [$filenameHtml, $fileInfoHtml];
 
-            if ($this->aria2->methodName === "tellStopped") {
+            if ($this->aria2->methodName === 'tellStopped') {
                 $actions[] = $this->createActionItem('purge', 'purge');
             }
-            if ($this->aria2->methodName === "tellWaiting") {
+            if ($this->aria2->methodName === 'tellWaiting') {
                 $actions[] = $this->createActionItem('unpause', 'unpause');
                 $actions[] = $this->createActionItem('delete', 'remove');
             }
-            if ($this->aria2->methodName === "tellActive") {
-                $speed = [Helper::formatBytes($value['downloadSpeed']), $left];
-                $tmp['speed'] = $speed;
-                $tmp['progress'] = $value['progress'];
+            if ($this->aria2->methodName === 'tellActive') {
+                $tmp['speed'] = [Helper::formatBytes($dlSpeed), $left];
+                $tmp['progress'] = $progressDisplay;
                 $actions[] = $this->createActionItem('pause', 'pause');
             }
-            if (strtolower($value['status']) === 'error') {
-                $tmp['status'] = $value['errorMessage'];
-            } else if ($this->aria2->methodName !== "tellActive") {
-                $tmp['status'] = $value['status'];
+            if (strtolower((string) ($value['status'] ?? '')) === 'error') {
+                $tmp['status'] = (string) ($value['errorMessage'] ?? 'error');
+            } elseif ($this->aria2->methodName !== 'tellActive') {
+                $tmp['status'] = (string) ($value['status'] ?? '');
             }
             $tmp['data_gid'] = $value['gid'] ?? 0;
             $tmp['actions'] = $actions;
-            //$tmp['actions'] = '';
-            array_push($data['row'], $tmp);
+            $data['row'][] = $tmp;
         }
-        if ($this->aria2->methodName === "tellActive") {
-            $data['title'] = Helper::getTableTitles('active');
-        } else {
-            $data['title'] = Helper::getTableTitles();
-        }
+
+        $data['title'] = $this->aria2->methodName === 'tellActive'
+            ? Helper::getTableTitles('active')
+            : Helper::getTableTitles();
+
         return $data;
     }
-    private function filterData($resp)
-    {
 
-        $data = [];
-        if (empty($resp)) {
-            return $data;
-        }
-        if (isset($resp['error'])) {
+    private function filterData(array $resp): array
+    {
+        if (empty($resp) || isset($resp['error'])) {
             return $resp;
         }
-
-        $data = array_filter($resp, function ($value) {
-            $gid = $value['following'] ?? $value['gid'];
-            return (bool) ($this->dbconn->getUidByGid($gid) === $this->uid);
-        });
-
-        return $data;
+        return array_values(array_filter($resp, function ($value) {
+            if (!is_array($value)) {
+                return false;
+            }
+            $gid = (string) ($value['following'] ?? $value['gid'] ?? '');
+            return $gid !== '' && $this->dbconn->getUidByGid($gid) === $this->uid;
+        }));
     }
 }

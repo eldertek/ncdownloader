@@ -1,27 +1,55 @@
 <?xml version="1.0"?>
-<info xmlns:xsi= "http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
     <id>ncdownloader</id>
     <name>NCDownloader</name>
-    <summary>Aria2 and youtube-dl web gui for nextcloud</summary>
-    <description>
-Search for torrents within the app from mutiple BT sites;
-Control Aria2 and manage download tasks from the web;
-download videos from 700+ video sites(youtube,youku,vimo,dailymotion,twitter,facebook and the likes
-    </description>
-    <version>1.0.23</version>
-    <licence>agpl</licence>
+    <summary>Aria2 and yt-dlp download manager for Nextcloud</summary>
+    <summary lang="fr">Gestionnaire de téléchargement Aria2 et yt-dlp pour Nextcloud</summary>
+    <description><![CDATA[Download files, torrents and online media directly into your Nextcloud storage:
+
+* Control Aria2 and manage HTTP, FTP, Magnet and BitTorrent downloads from the web interface
+* Download videos and audio tracks with yt-dlp (with fallback to youtube-dl)
+* Automatic Nextcloud Files indexing as soon as downloads complete
+* Search torrents from built-in providers
+]]></description>
+    <description lang="fr"><![CDATA[Téléchargez des fichiers, torrents et médias en ligne directement dans votre espace Nextcloud :
+
+* Pilotez Aria2 et gérez vos téléchargements HTTP, FTP, Magnet et BitTorrent depuis l'interface web
+* Téléchargez des vidéos et pistes audio avec yt-dlp (avec repli sur youtube-dl)
+* Indexation automatique dans Nextcloud Fichiers dès la fin du téléchargement
+* Recherche de torrents intégrée
+]]></description>
+    <version>1.1.0</version>
+    <licence>AGPL-3.0-or-later</licence>
     <author mail="freefallbenson@gmail.com" homepage="https://github.com/shiningw">jiaxinhuang</author>
+    <author>André Théo LAURET</author>
     <namespace>NCDownloader</namespace>
+    <documentation>
+        <user>https://github.com/eldertek/ncdownloader#readme</user>
+        <admin>https://github.com/eldertek/ncdownloader#readme</admin>
+    </documentation>
     <category>tools</category>
-    <website>https://github.com/shiningw/ncdownloader</website>
-    <bugs>https://github.com/shiningw/ncdownloader/issues</bugs>
+    <website>https://github.com/eldertek/ncdownloader</website>
+    <discussion>https://github.com/eldertek/ncdownloader/issues</discussion>
+    <bugs>https://github.com/eldertek/ncdownloader/issues</bugs>
+    <repository type="git">https://github.com/eldertek/ncdownloader.git</repository>
     <screenshot>https://user-images.githubusercontent.com/3911975/142444998-54dd54a6-0c8e-4d49-8188-270964a99c50.png</screenshot>
     <screenshot>https://user-images.githubusercontent.com/3911975/142445020-27ec389a-5437-4d28-acc0-5e757fd6897d.png</screenshot>
-    <repository>https://github.com/shiningw/ncdownloader</repository>
+    <donation>https://patreon.com/eldertek</donation>
+    <donation>https://github.com/sponsors/eldertek</donation>
     <dependencies>
-        <php min-version="7.3" max-version="8.3" />
-        <nextcloud min-version="20" max-version="31"/>
+        <php min-version="8.1" max-version="8.5" />
+        <nextcloud min-version="28" max-version="35" />
     </dependencies>
+    <commands>
+        <command>OCA\NCDownloader\Command\Aria2Command</command>
+    </commands>
+    <settings>
+        <admin>OCA\NCDownloader\Settings\Admin</admin>
+        <admin-section>OCA\NCDownloader\Settings\AdminSection</admin-section>
+        <personal>OCA\NCDownloader\Settings\Personal</personal>
+        <personal-section>OCA\NCDownloader\Settings\PersonalSection</personal-section>
+    </settings>
     <navigations>
         <navigation>
             <name>NCDownloader</name>
@@ -29,14 +57,4 @@ download videos from 700+ video sites(youtube,youku,vimo,dailymotion,twitter,fac
             <icon>ncdownloader.svg</icon>
         </navigation>
     </navigations>
-    <settings>
-        <admin>OCA\NCDownloader\Settings\Admin</admin>
-        <personal>OCA\NCDownloader\Settings\Personal</personal>
-        <admin-section>OCA\NCDownloader\Settings\AdminSection</admin-section>
-        <personal-section>OCA\NCDownloader\Settings\PersonalSection</personal-section>
-    </settings>
-    <commands>
-        <command>OCA\NCDownloader\Command\Aria2Command</command>
-    </commands>
-
 </info>

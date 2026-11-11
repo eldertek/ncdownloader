@@ -28,7 +28,7 @@ export default {
     return {
       options: [],
       validOptions: aria2Options,
-      settings: [],
+      settings: {},
       pStatus: false,
       aria2Version: "",
       ytdVersion: "",
@@ -42,34 +42,33 @@ export default {
   },
   methods: {
     toggle(name, value) {
-      let data = {};
+      const data = {};
       data[name] = value ? 1 : 0;
-      let path = "/apps/ncdownloader/admin/save";
-      const url = helper.generateUrl(path);
+      const url = helper.generateUrl("/apps/ncdownloader/admin/save");
       helper
         .httpClient(url)
         .setData(data)
         .setHandler((resp) => {
-          if (resp["message"]) {
-            helper.message(helper.t(resp["message"]), 1000);
+          if (resp && resp.message) {
+            helper.message(helper.t(resp.message), 1000);
           }
         })
         .send();
     },
-    render(event, $vm) {
+    render(_event, $vm) {
       helper
         .httpClient(helper.generateUrl("/apps/ncdownloader/admin/aria2/get"))
         .setMethod("GET")
         .setHandler((data) => {
-          if (!data) {
+          if (!data || typeof data !== "object") {
             return;
           }
-          let input = [];
-          for (let key in data) {
-            if (aria2Options.includes(key))
+          const input = [];
+          for (const key in data) {
+            if (aria2Options.includes(key)) {
               input.push({ name: key, value: data[key], id: key });
+            }
           }
-          //settingsForm.getInstance($vm.container).render(input);
           $vm.options = input;
         })
         .send();
@@ -82,19 +81,22 @@ export default {
   },
   mounted() {
     try {
-      let data = this.$el.parentElement.getAttribute("data-settings");
-      data = JSON.parse(data);
-      let options = this.$el.parentElement.getAttribute("data-options");
-      options = JSON.parse(options);
+      const hostEl = document.getElementById("ncdownloader-admin-settings") || (this.$el && this.$el.parentElement);
+      if (!hostEl) {
+        return;
+      }
+      const rawSettings = hostEl.getAttribute("data-settings");
+      const rawOptions = hostEl.getAttribute("data-options");
+      const data = rawSettings ? JSON.parse(rawSettings) : {};
+      const options = rawOptions ? JSON.parse(rawOptions) : [];
       this.settings = data;
-      this.pStatus = helper.str2Boolean(data["disallow_aria2_settings"]);
-      this.aria2Version = data["aria2_version"];
-      this.ytdVersion = data["ytdl_version"];
-      this.options = options;
+      this.pStatus = helper.str2Boolean(String(data.disallow_aria2_settings || ""));
+      this.aria2Version = data.aria2_version || "";
+      this.ytdVersion = data.ytdl_version || "";
+      this.options = Array.isArray(options) ? options : [];
     } catch (e) {
-      helper.error(e);
+      helper.error(String(e));
     }
   },
-
 };
 </script>

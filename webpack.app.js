@@ -1,18 +1,14 @@
 const path = require('path');
 const webpack = require('webpack');
-const { VueLoaderPlugin } = require('vue-loader')
-const MiniCssExtractPlugin = require("mini-css-extract-plugin");
-
+const { VueLoaderPlugin } = require('vue-loader');
+const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 
 module.exports = {
-  /* experiments: {
-     asset: true
-   },*/
   entry: {
     app: './src/index.js',
     appSettings: './src/settings.js'
   },
-  devtool: "source-map",
+  devtool: process.env.NODE_ENV === 'production' ? false : 'source-map',
   output: {
     path: path.resolve(__dirname, 'js'),
     filename: '[name].js',
@@ -32,14 +28,9 @@ module.exports = {
       {
         test: /\.s?[ac]ss$/i,
         use: [
-          //Create standalone css files
           MiniCssExtractPlugin.loader,
-          // Creates `style` nodes from JS strings
-          // "style-loader",
-          // Translates CSS into CommonJS
-          "css-loader",
-          // Compiles Sass to CSS
-          "sass-loader",
+          'css-loader',
+          'sass-loader',
         ],
       },
       {
@@ -51,10 +42,14 @@ module.exports = {
         test: /\.vue$/,
         use: 'vue-loader'
       },
-      /*{ test: /\.css$/, use: ['vue-style-loader', 'css-loader'] },*/
       {
         test: /\.tsx?$/,
-        use: 'ts-loader',
+        use: {
+          loader: 'ts-loader',
+          options: {
+            transpileOnly: true
+          }
+        },
         exclude: /node_modules/,
       },
     ]
@@ -69,23 +64,24 @@ module.exports = {
       '.json',
     ],
     alias: {
-      /* vue: 'vue/dist/vue.esm-bundler.js'*/
       assets: path.resolve(__dirname, 'img')
     },
   },
   plugins: [
     new VueLoaderPlugin(),
+    new webpack.DefinePlugin({
+      __VUE_OPTIONS_API__: JSON.stringify(true),
+      __VUE_PROD_DEVTOOLS__: JSON.stringify(false),
+    }),
     new webpack.ProvidePlugin({
-      $: "jquery",
-      jquery: "jQuery",
-      "window.jQuery": "jquery"
+      $: 'jquery',
+      jQuery: 'jquery',
+      jquery: 'jquery',
+      'window.jQuery': 'jquery'
     }),
     new MiniCssExtractPlugin({
       filename: '../css/[name].css',
     }),
   ],
-  externals: {
-    jquery: 'jQuery',
-    OC: "OC"
-  },
+  externals: {},
 };

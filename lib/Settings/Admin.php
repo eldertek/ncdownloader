@@ -2,70 +2,45 @@
 
 namespace OCA\NCDownloader\Settings;
 
-use OCP\AppFramework\Http\TemplateResponse;
-use OCP\AppFramework\Utility\ITimeFactory;
-use OCP\IConfig;
-use OCP\IDBConnection;
-use OCP\Settings\ISettings;
-use OCA\NCDownloader\Db\Settings;
 use OCA\NCDownloader\Tools\Helper;
-
+use OCP\AppFramework\Http\TemplateResponse;
+use OCP\IURLGenerator;
+use OCP\Settings\ISettings;
+use OCP\Util;
 
 class Admin implements ISettings
 {
+    private IURLGenerator $urlGenerator;
 
-	/** @var IDBConnection */
-	private $connection;
-	/** @var ITimeFactory */
-	private $timeFactory;
-	/** @var IConfig */
-	private $config;
+    public function __construct(IURLGenerator $urlGenerator)
+    {
+        $this->urlGenerator = $urlGenerator;
+    }
 
-	public function __construct(
-		IDBConnection $connection,
-		ITimeFactory $timeFactory,
-		IConfig $config
-	) {
-		$this->connection = $connection;
-		$this->timeFactory = $timeFactory;
-		$this->config = $config;
-	}
+    public function getForm(): TemplateResponse
+    {
+        Util::addScript('ncdownloader', 'appSettings');
+        Util::addStyle('ncdownloader', 'appSettings');
 
-	/**
-	 * @return TemplateResponse
-	 */
-	public function getForm()
-	{
-		$settings = Helper::getAllAdminSettings();
-		$settings +=  [
-			"path" => "/apps/ncdownloader/admin/save",
-			"aria2_version" => Helper::getAria2Version(),
-			"ytdl_version" => Helper::getYtdlVersion(),
-		];
-		$parameters = [
-			'settings' => $settings,
-			'options' => Helper::getAdminOptions($settings),
-		];
-		return new TemplateResponse('ncdownloader', 'settings/Admin', $parameters, '');
-	}
+        $settings = Helper::getAllAdminSettings();
+        $settings['path'] = $this->urlGenerator->linkToRoute('ncdownloader.Settings.saveAdmin');
+        $settings['aria2_version'] = Helper::getAria2Version();
+        $settings['ytdl_version'] = Helper::getYtdlVersion();
 
-	/**
-	 * @return string the section ID, e.g. 'sharing'
-	 */
-	public function getSection(): string
-	{
-		return 'ncdownloader';
-	}
+        $parameters = [
+            'settings' => $settings,
+            'options' => Helper::getAdminOptions($settings),
+        ];
+        return new TemplateResponse('ncdownloader', 'settings/Admin', $parameters, '');
+    }
 
-	/**
-	 * @return int whether the form should be rather on the top or bottom of
-	 * the admin section. The forms are arranged in ascending order of the
-	 * priority values. It is required to return a value between 0 and 100.
-	 *
-	 * E.g.: 70
-	 */
-	public function getPriority(): int
-	{
-		return 0;
-	}
+    public function getSection(): string
+    {
+        return 'ncdownloader';
+    }
+
+    public function getPriority(): int
+    {
+        return 10;
+    }
 }

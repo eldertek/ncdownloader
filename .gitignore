@@ -1,8 +1,11 @@
 /node_modules
+/build
+/vendor
 .sass-cache
-vendor
 build.sh
 test.php
-js/app*
+js/*.map
+css/*.map
 exclude
 bin
+.phpunit.result.cache

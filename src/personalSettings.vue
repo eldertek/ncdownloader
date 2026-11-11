@@ -8,16 +8,16 @@
     @mounted="renderAria2" path="/apps/ncdownloader/personal/aria2/save" :validOptions="aria2Options">
     <template #save>Save Aria2 Settings</template>
   </customOptions>
-  <customOptions name="custom-ytdl-settings" title="Personal YouTube-dl Settings" @mounted="renderYtdl"
+  <customOptions name="custom-ytdl-settings" title="Personal yt-dlp Settings" @mounted="renderYtdl"
     path="/apps/ncdownloader/personal/ytdl/save" :validOptions="ytdlOptions">
-    <template #save>Save Youtube-dl Settings</template>
+    <template #save>Save yt-dlp Settings</template>
   </customOptions>
 </template>
 <script>
 import customOptions from "./components/customOptions";
 import helper from "./utils/helper";
 import aria2Options from "./utils/aria2Options";
-import { options as ytdlFullOptions, names as ytdlOptions } from "./utils/ytdlOptions";
+import { names as ytdlOptions } from "./utils/ytdlOptions";
 import settingsRow from "./components/settingsRow";
 
 export default {
@@ -36,38 +36,36 @@ export default {
     settingsRow,
   },
   methods: {
-    renderAria2(event, $vm) {
+    renderAria2(_event, $vm) {
       helper
         .httpClient(helper.generateUrl("/apps/ncdownloader/personal/aria2/get"))
-        //.setMethod("GET")
         .setHandler((data) => {
-          if (!data) {
+          if (!data || typeof data !== "object") {
             return;
           }
-          let input = [];
-          for (let key in data) {
-            if (aria2Options.includes(key))
+          const input = [];
+          for (const key in data) {
+            if (aria2Options.includes(key)) {
               input.push({ name: key, value: data[key], id: key });
+            }
           }
-          //settingsForm.getInstance($vm.container).render(input);
           $vm.options = input;
         })
         .send();
     },
-    renderYtdl(event, $vm) {
+    renderYtdl(_event, $vm) {
       helper
         .httpClient(helper.generateUrl("/apps/ncdownloader/personal/ytdl/get"))
-        //.setMethod("GET")
         .setHandler((data) => {
-          if (!data) {
+          if (!data || typeof data !== "object") {
             return;
           }
-          let input = [];
-          for (let key in data) {
-            if (ytdlOptions.includes(key))
+          const input = [];
+          for (const key in data) {
+            if (ytdlOptions.includes(key)) {
               input.push({ name: key, value: data[key], id: key });
+            }
           }
-          //settingsForm.getInstance($vm.container).render(input);
           $vm.options = input;
         })
         .send();
@@ -80,15 +78,19 @@ export default {
   },
   mounted() {
     try {
-      let data = this.$el.parentElement.getAttribute("data-settings");
-      data = JSON.parse(data);
-      let options = this.$el.parentElement.getAttribute("data-options");
-      options = JSON.parse(options);
-      this.disallowAria2Settings = helper.str2Boolean(data["disallow_aria2_settings"]);
-      this.isAdmin = data["is_admin"];
-      this.options = options
+      const hostEl = document.getElementById("ncdownloader-personal-settings") || (this.$el && this.$el.parentElement);
+      if (!hostEl) {
+        return;
+      }
+      const rawSettings = hostEl.getAttribute("data-settings");
+      const rawOptions = hostEl.getAttribute("data-options");
+      const data = rawSettings ? JSON.parse(rawSettings) : {};
+      const options = rawOptions ? JSON.parse(rawOptions) : [];
+      this.disallowAria2Settings = helper.str2Boolean(String(data.disallow_aria2_settings || ""));
+      this.isAdmin = Boolean(data.is_admin);
+      this.options = Array.isArray(options) ? options : [];
     } catch (e) {
-      helper.error(e);
+      helper.error(String(e));
     }
   },
 };

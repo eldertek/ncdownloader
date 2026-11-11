@@ -1,26 +1,28 @@
 {
 	"name": "ncdownloader",
-	"description": "Nextcloud Frontend for youtube-dl and Aria2",
-	"version": "1.0.0",
+	"description": "Nextcloud Frontend for yt-dlp and Aria2",
+	"version": "1.1.0",
 	"author": "Jiaxin Huang <freefallbenson@gmail.com>",
 	"contributors": [
-		"Jiaxin Huang <freefallbenson@gmail.com>"
+		"Jiaxin Huang <freefallbenson@gmail.com>",
+		"André Théo LAURET <andrelauret@eclipse-technology.eu>"
 	],
 	"keywords": [
 		"nextcloud",
 		"ncdownloader",
 		"app",
-		"dev"
+		"yt-dlp",
+		"aria2"
 	],
 	"bugs": {
-		"url": "https://github.com/shiningw/ncdownloader/issues"
+		"url": "https://github.com/eldertek/ncdownloader/issues"
 	},
 	"repository": {
-		"url": "https://github.com/shiningw/ncdownloader",
+		"url": "https://github.com/eldertek/ncdownloader",
 		"type": "git"
 	},
-	"homepage": "https://github.com/shiningw/ncdownloader",
-	"license": "agpl",
+	"homepage": "https://github.com/eldertek/ncdownloader",
+	"license": "AGPL-3.0-or-later",
 	"private": true,
 	"scripts": {
 		"build": "NODE_ENV=production webpack --progress --config webpack.app.js",
@@ -38,22 +40,21 @@
 		"vuex": "^4.0.2"
 	},
 	"engines": {
-		"node": ">=14.0.0",
-		"npm": ">=7.0.0"
+		"node": ">=18.0.0",
+		"npm": ">=8.0.0"
 	},
 	"devDependencies": {
 		"@babel/core": "^7.15.0",
 		"@babel/preset-env": "^7.15.0",
 		"@nextcloud/browserslist-config": "^2.2.0",
-		"@nextcloud/dialogs": "^3.1.2",
-		"@nextcloud/l10n": "^1.4.1",
-		"@nextcloud/router": "^2.0.0",
+		"@nextcloud/l10n": "^2.2.0",
+		"@nextcloud/router": "^3.0.1",
 		"@vue/compiler-sfc": "^3.2.20",
 		"babel-loader": "^8.2.2",
 		"bootstrap": "^5.1.0",
 		"css-loader": "^6.4.0",
 		"html-webpack-plugin": "^5.3.2",
-		"jquery": "^3.6.0",
+		"jquery": "^3.7.1",
 		"mini-css-extract-plugin": "^2.6.0",
 		"popper.js": "^1.16.1",
 		"sass": "^1.38.0",

@@ -19,12 +19,12 @@ namespace OCA\NCDownloader\Tools;
  */
 class ExecutableFinder
 {
-    private $suffixes = ['.exe', '.bat', '.cmd', '.com'];
+    private array $suffixes = ['.exe', '.bat', '.cmd', '.com'];
 
     /**
      * Replaces default suffixes of executable.
      */
-    public function setSuffixes(array $suffixes)
+    public function setSuffixes(array $suffixes): void
     {
         $this->suffixes = $suffixes;
     }
@@ -32,7 +32,7 @@ class ExecutableFinder
     /**
      * Adds new possible suffix to check for executable.
      */
-    public function addSuffix(string $suffix)
+    public function addSuffix(string $suffix): void
     {
         $this->suffixes[] = $suffix;
     }
@@ -46,24 +46,25 @@ class ExecutableFinder
      *
      * @return string|null
      */
-    public function find(string $name, string $default = null, array $extraDirs = [])
+    public function find(string $name, ?string $default = null, array $extraDirs = []): ?string
     {
-        if (ini_get('open_basedir')) {
-            $searchPath = array_merge(explode(\PATH_SEPARATOR, ini_get('open_basedir')), $extraDirs);
+        $openBasedir = (string) ini_get('open_basedir');
+        if ($openBasedir !== '') {
+            $searchPath = array_merge(explode(\PATH_SEPARATOR, $openBasedir), $extraDirs);
             $dirs = [];
             foreach ($searchPath as $path) {
-                // Silencing against https://bugs.php.net/69240
                 if (@is_dir($path)) {
                     $dirs[] = $path;
                 } else {
-                    if (basename($path) == $name && @is_executable($path)) {
+                    if (basename($path) === $name && @is_executable($path)) {
                         return $path;
                     }
                 }
             }
         } else {
+            $envPath = getenv('PATH') ?: (getenv('Path') ?: '');
             $dirs = array_merge(
-                explode(\PATH_SEPARATOR, getenv('PATH') ?: getenv('Path')),
+                $envPath !== '' ? explode(\PATH_SEPARATOR, $envPath) : [],
                 $extraDirs
             );
         }
@@ -75,7 +76,11 @@ class ExecutableFinder
         }
         foreach ($suffixes as $suffix) {
             foreach ($dirs as $dir) {
-                if (@is_file($file = $dir.\DIRECTORY_SEPARATOR.$name.$suffix) && ('\\' === \DIRECTORY_SEPARATOR || @is_executable($file))) {
+                if ($dir === '') {
+                    continue;
+                }
+                $file = rtrim($dir, \DIRECTORY_SEPARATOR) . \DIRECTORY_SEPARATOR . $name . $suffix;
+                if (@is_file($file) && ('\\' === \DIRECTORY_SEPARATOR || @is_executable($file))) {
                     return $file;
                 }
             }

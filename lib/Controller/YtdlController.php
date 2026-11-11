@@ -2,169 +2,231 @@
 
 namespace OCA\NCDownloader\Controller;
 
+use OCA\NCDownloader\AppInfo\Application;
 use OCA\NCDownloader\Aria2\Aria2;
 use OCA\NCDownloader\Db\Helper as DbHelper;
 use OCA\NCDownloader\Tools\folderScan;
 use OCA\NCDownloader\Tools\Helper;
+use OCA\NCDownloader\Tools\UrlValidator;
 use OCA\NCDownloader\Ytdl\Ytdl;
 use OCP\AppFramework\Controller;
+use OCP\AppFramework\Http\Attribute\NoAdminRequired;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\IL10N;
 use OCP\IRequest;
+use OCP\IURLGenerator;
+use OCP\IUserSession;
 
 class YtdlController extends Controller
 {
-    //@config OC\AppConfig
-    private $l10n;
-    private $audio_extensions = array("mp3", "m4a", "vorbis");
-    private $video_extensions = array("mp4", "webm", "mkv");
-    private $uid;
-    private $downloadDir;
-    private $dbconn;
-    private $ytdl;
-    private $aria2;
-    private $urlGenerator;
-    private $tablename;
-    private $dataDir;
+    private IL10N $l10n;
+    private array $audio_extensions = ['mp3', 'm4a', 'vorbis', 'opus'];
+    private array $video_extensions = ['mp4', 'webm', 'mkv'];
+    private string $uid;
+    private string $downloadDir;
+    private DbHelper $dbconn;
+    private Ytdl $ytdl;
+    private Aria2 $aria2;
+    private IURLGenerator $urlGenerator;
 
-    public function __construct($appName, IRequest $request, $UserId, IL10N $IL10N, Aria2 $aria2, Ytdl $ytdl)
-    {
-        parent::__construct($appName, $request);
-        $this->appName = $appName;
-        $this->uid = $UserId;
-        $this->urlGenerator = \OC::$server->get(\OCP\IURLGenerator::class);
-        $this->l10n = $IL10N;
-        $this->downloadDir = Helper::getDownloadDir();
+    public function __construct(
+        IRequest $request,
+        IUserSession $userSession,
+        IL10N $l10n,
+        IURLGenerator $urlGenerator,
+        Aria2 $aria2,
+        Ytdl $ytdl
+    ) {
+        parent::__construct(Application::APP_ID, $request);
+        $user = $userSession->getUser();
+        $this->uid = $user ? $user->getUID() : '';
+        $this->urlGenerator = $urlGenerator;
+        $this->l10n = $l10n;
+        $this->downloadDir = Helper::getDownloadDir($this->uid);
         $this->dbconn = new DbHelper();
         $this->ytdl = $ytdl;
         $this->aria2 = $aria2;
         $this->aria2->init();
-        $this->tablename = $this->dbconn->queryBuilder->getTableName("ncdownloader_info");
     }
+
     /**
      * @NoAdminRequired
-     *
      */
-    public function Index()
+    #[NoAdminRequired]
+    public function Index(): JSONResponse
     {
         $data = $this->dbconn->getYtdlByUid($this->uid);
-        if (is_array($data) && count($data) < 1) {
-            return [];
+        if (count($data) < 1) {
+            return new JSONResponse([]);
         }
-        $resp['title'] = [];
-        $resp['row'] = [];
-        $params = ['dir' => $data['path'] ?? $this->downloadDir];
-        $folderLink = $this->urlGenerator->linkToRoute('files.view.index', $params);
+        $resp = [
+            'title' => [],
+            'row' => [],
+        ];
         foreach ($data as $value) {
             $tmp = [];
-            $extra = $this->dbconn->getExtra($value["data"]);
-            $filename = sprintf('<a class="download-file-folder" href="%s">%s</a>', $folderLink, $value['filename']);
-            $fileInfo = sprintf('<div class="ncd-file-info"><button id="icon-clipboard" class="icon-clipboard" data-text="%s"></button> %s | % s</div>', $extra['link'], $value['filesize'], date("Y-m-d H:i:s", $value['timestamp']));
-            $tmp['filename'] = array($filename, $fileInfo);
-            $tmp['speed'] = explode("|", $value['speed']);
-            $tmp['progress'] = $value['progress'];
+            $extra = $this->dbconn->getExtra($value['data'] ?? null);
+            $dirParam = (string) ($extra['path'] ?? $this->downloadDir);
+            $folderLink = $this->urlGenerator->linkToRoute('files.view.index', ['dir' => $dirParam]);
 
-            $path = $this->urlGenerator->linkToRoute('ncdownloader.Ytdl.Delete');
-            $tmp['actions'][] = ['name' => 'delete', 'path' => $path];
-            $path = $this->urlGenerator->linkToRoute('ncdownloader.Ytdl.Redownload');
-            $tmp['actions'][] = ['name' => 'refresh', 'path' => $path];
+            $safeHref = htmlspecialchars($folderLink, ENT_QUOTES, 'UTF-8');
+            $safeName = htmlspecialchars((string) ($value['filename'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $safeLink = htmlspecialchars((string) ($extra['link'] ?? ''), ENT_QUOTES, 'UTF-8');
+            $safeSize = htmlspecialchars((string) ($value['filesize'] ?? ''), ENT_QUOTES, 'UTF-8');
+
+            $filename = sprintf('<a class="download-file-folder" href="%s">%s</a>', $safeHref, $safeName);
+            $fileInfo = sprintf(
+                '<div class="ncd-file-info"><button id="icon-clipboard" class="icon-clipboard" data-text="%s"></button> %s | %s</div>',
+                $safeLink,
+                $safeSize,
+                date('Y-m-d H:i:s', (int) ($value['timestamp'] ?? time()))
+            );
+            $tmp['filename'] = [$filename, $fileInfo];
+            $tmp['speed'] = explode('|', (string) ($value['speed'] ?? '0'));
+            $tmp['progress'] = $value['progress'] ?? '0';
+
+            $deletePath = $this->urlGenerator->linkToRoute('ncdownloader.Ytdl.Delete');
+            $tmp['actions'][] = ['name' => 'delete', 'path' => $deletePath];
+            $redownloadPath = $this->urlGenerator->linkToRoute('ncdownloader.Ytdl.Redownload');
+            $tmp['actions'][] = ['name' => 'refresh', 'path' => $redownloadPath];
 
             $tmp['data_gid'] = $value['gid'] ?? 0;
-            array_push($resp['row'], $tmp);
+            $resp['row'][] = $tmp;
         }
 
         $resp['title'] = ['filename', 'speed', 'progress', 'actions'];
         $resp['counter'] = ['ytdl' => count($data)];
-        folderScan::sync();
+        folderScan::sync(false, $this->uid);
         return new JSONResponse($resp);
     }
+
     /**
      * @NoAdminRequired
      */
-    public function Download(string $url, ?string $extension = "mp4")
+    #[NoAdminRequired]
+    public function Download(string $url = '', ?string $extension = 'mp4'): JSONResponse
     {
-        $dlDir = $this->ytdl->getDownloadDir();
-        if (!is_writable($dlDir)) {
-            return new JSONResponse(['error' => sprintf("%s is not writable", $dlDir)]);
+        $url = trim($url !== '' ? $url : (string) $this->request->getParam('url', ''));
+        $check = UrlValidator::validate($url, ['http', 'https']);
+        if (!$check['valid']) {
+            return new JSONResponse(['error' => $check['error'] ?? 'Invalid URL']);
         }
-        //$url = trim($this->request->getParam('text-input-value'));
-        $url = trim($url);
+
+        $dlDir = Helper::getRealDownloadDir($this->uid);
+        if ($dlDir !== '') {
+            $this->ytdl->setDownloadDir($dlDir);
+        } else {
+            $dlDir = $this->ytdl->getDownloadDir();
+        }
+        if (!is_writable($dlDir)) {
+            return new JSONResponse(['error' => sprintf('%s is not writable', $dlDir)]);
+        }
+
+        $extension = strtolower(trim((string) ($extension ?? 'mp4')));
         $yt = $this->ytdl;
-        if (in_array($extension, $this->audio_extensions)) {
+        if (in_array($extension, $this->audio_extensions, true)) {
             $yt->audioOnly = true;
             $yt->audioFormat = $extension;
         } else {
-            $yt->videoFormat = $extension;
+            $yt->audioOnly = false;
+            $yt->videoFormat = in_array($extension, $this->video_extensions, true) ? $extension : 'mp4';
         }
         if (!$yt->isInstalled()) {
-            return new JSONResponse(["error" => "Please install the latest yt-dlp or make the bundled binary file executable in ncdownloader/bin"]);
+            return new JSONResponse([
+                'error' => 'Please install yt-dlp on the server or download it from NCDownloader admin settings',
+            ]);
         }
         if (Helper::isGetUrlSite($url)) {
             return new JSONResponse($this->downloadUrlSite($url));
         }
-        $yt->dbDlPath = Helper::getDownloadDir();
+
+        $yt->dbDlPath = $this->downloadDir;
         $resp = $yt->forceIPV4()->download($url);
-        folderScan::sync(true);
+        if (!isset($resp['error'])) {
+            folderScan::scanTarget(
+                $this->uid,
+                $this->downloadDir,
+                isset($resp['filename']) && is_string($resp['filename']) ? $resp['filename'] : null
+            );
+        }
         return new JSONResponse($resp);
     }
-    private function downloadUrlSite($url)
+
+    private function downloadUrlSite(string $url): array
     {
-        $yt = $this->ytdl;
-        if ($data = $yt->forceIPV4()->getDownloadUrl($url)) {
-            return $this->_download($data['url'], $data['filename']);
-        } else {
-            return ['error' => $this->l10n->t("failed to get any url!")];
+        $data = $this->ytdl->forceIPV4()->getDownloadUrl($url);
+        if (!empty($data['url'])) {
+            return $this->_download((string) $data['url'], $data['filename'] ?? null);
         }
+        return ['error' => $this->l10n->t('Failed to extract media URL')];
     }
+
     /**
      * @NoAdminRequired
      */
-    public function Delete(string $gid)
+    #[NoAdminRequired]
+    public function Delete(string $gid = ''): JSONResponse
     {
-        //$gid = $this->request->getParam('gid');
-        if (!$gid) {
-            return new JSONResponse(['error' => "no gid value is received!"]);
+        $gid = trim($gid !== '' ? $gid : (string) $this->request->getParam('gid', ''));
+        if ($gid === '') {
+            return new JSONResponse(['error' => 'No gid value received']);
         }
 
         $row = $this->dbconn->getByGid($gid);
-        $data = $this->dbconn->getExtra($row["data"]);
+        if (!is_array($row) || (($row['uid'] ?? '') !== $this->uid && !Helper::isAdmin($this->uid))) {
+            return new JSONResponse(['error' => 'Not found'], 404);
+        }
+
+        $data = $this->dbconn->getExtra($row['data'] ?? null);
+        $msg = 'Removed';
         if (!isset($data['pid'])) {
             if ($this->dbconn->deleteByGid($gid)) {
-                $msg = sprintf("%s is deleted from database!", $gid);
+                $msg = sprintf('%s deleted from database', $gid);
             }
             return new JSONResponse(['message' => $msg]);
         }
-        $pid = $data['pid'];
+
+        $pid = (int) $data['pid'];
         if (!Helper::isRunning($pid)) {
             if ($this->dbconn->deleteByGid($gid)) {
-                $msg = sprintf("%s is deleted from database!", $gid);
+                $msg = sprintf('%s deleted from database', $gid);
             } else {
-                $msg = sprintf("process %d is not running!", $pid);
+                $msg = sprintf('Process %d is not running', $pid);
             }
         } else {
             if (Helper::stop($pid)) {
-                $msg = sprintf("process %d has been terminated!", $pid);
+                $msg = sprintf('Process %d terminated', $pid);
             } else {
-                $msg = sprintf("failed to terminate process %d!", $pid);
+                $msg = sprintf('Failed to terminate process %d', $pid);
             }
             $this->dbconn->deleteByGid($gid);
         }
         return new JSONResponse(['message' => $msg]);
     }
+
     /**
      * @NoAdminRequired
      */
-    public function Redownload(string $gid)
+    #[NoAdminRequired]
+    public function Redownload(string $gid = ''): JSONResponse
     {
-        //$gid = $this->request->getParam('gid');
-        if (!$gid) {
-            return new JSONResponse(['error' => "no gid value is received!"]);
+        $gid = trim($gid !== '' ? $gid : (string) $this->request->getParam('gid', ''));
+        if ($gid === '') {
+            return new JSONResponse(['error' => 'No gid value received']);
         }
         $row = $this->dbconn->getByGid($gid);
-        $data = $this->dbconn->getExtra($row["data"]);
+        if (!is_array($row) || (($row['uid'] ?? '') !== $this->uid && !Helper::isAdmin($this->uid))) {
+            return new JSONResponse(['error' => 'Not found'], 404);
+        }
+        $data = $this->dbconn->getExtra($row['data'] ?? null);
         if (!empty($data['link'])) {
+            $link = (string) $data['link'];
+            $check = UrlValidator::validate($link, ['http', 'https']);
+            if (!$check['valid']) {
+                return new JSONResponse(['error' => $check['error'] ?? 'Invalid URL']);
+            }
             if (isset($data['ext'])) {
-                if (in_array($data['ext'], $this->audio_extensions)) {
+                if (in_array($data['ext'], $this->audio_extensions, true)) {
                     $this->ytdl->audioOnly = true;
                     $this->ytdl->audioFormat = $data['ext'];
                 } else {
@@ -172,54 +234,48 @@ class YtdlController extends Controller
                     $this->ytdl->videoFormat = $data['ext'];
                 }
             }
-            //$this->dbconn->deleteByGid($gid);
-            $this->ytdl->dbDlPath = Helper::getDownloadDir();
-            $resp = $this->ytdl->forceIPV4()->download($data['link']);
-            folderScan::sync();
+            $this->ytdl->dbDlPath = $this->downloadDir;
+            $resp = $this->ytdl->forceIPV4()->download($link);
+            if (!isset($resp['error'])) {
+                folderScan::scanTarget(
+                    $this->uid,
+                    $this->downloadDir,
+                    isset($resp['filename']) && is_string($resp['filename']) ? $resp['filename'] : null
+                );
+            }
             return new JSONResponse($resp);
         }
-        return new JSONResponse(['error' => "no link"]);
+        return new JSONResponse(['error' => 'No link']);
     }
 
-    private function _download($url, $filename = null)
+    private function _download(string $url, ?string $filename = null): array
     {
+        $check = UrlValidator::validate($url, ['http', 'https']);
+        if (!$check['valid']) {
+            return ['error' => $check['error'] ?? 'Invalid URL'];
+        }
         if (!$filename) {
-            $filename = Helper::getFileName($url);
+            $filename = Helper::getFilename($url);
         }
         $this->aria2->setFileName($filename);
 
         $result = $this->aria2->download($url);
         if (!$result) {
-            return ['error' => 'failed to download the file for some reason!'];
+            return ['error' => 'Failed to start download'];
         }
-        if (isset($result['error'])) {
+        if (is_array($result) && isset($result['error'])) {
             return $result;
         }
 
         $data = [
             'uid' => $this->uid,
-            'gid' => $result,
-            'type' => 1,
-            'filename' => $filename ?? 'unknown',
+            'gid' => (string) $result,
+            'type' => Helper::DOWNLOADTYPE['ARIA2'],
+            'filename' => $filename ?: 'unknown',
             'timestamp' => time(),
-            'data' => serialize(['link' => $url]),
+            'data' => ['link' => $url, 'path' => $this->downloadDir],
         ];
         $this->dbconn->save($data);
-        $resp = ['message' => $filename, 'result' => $result];
-        return $resp;
-    }
-
-    private function installYTD()
-    {
-        try {
-            $filename = Helper::getFileName($this->installUrl());
-            $this->setDownloadDir($this->dataDir . "/bin");
-            $resp = $this->Save($this->installUrl(), $filename);
-            return $resp;
-        } catch (\Exception $e) {
-            return ['error' => $e->getMessage()];
-        }
-
-        return ['error' => $this->l10n->t("Youtube-dl NOT installed!")];
+        return ['message' => $filename, 'result' => $result];
     }
 }

@@ -21,12 +21,12 @@
     </div>
     <div class="ncdownloader-settings-item">
       <a :href="personal.url" title="">
-        <button>{{ personal.title }}</button>
+        <button type="button">{{ personal.title }}</button>
       </a>
     </div>
     <div class="ncdownloader-settings-item" v-if="isAdmin">
       <a :href="admin.url" :title="admin.title">
-        <button>{{ admin.title }}</button>
+        <button type="button">{{ admin.title }}</button>
       </a>
     </div>
   </section>
@@ -35,46 +35,44 @@
 <script>
 import toggleButton from "./components/toggleButton";
 import helper from "./utils/helper";
-import { translate as t, translatePlural as n } from "@nextcloud/l10n";
-import Http from "./lib/http";
+import { translate as t } from "@nextcloud/l10n";
+
 const basePath = "/apps/ncdownloader";
 
 export default {
   name: "settingsBar",
   inject: ["settings"],
   data() {
-    let personal = {
-      title: t("ncdownloader", "Personal Settings"),
-      url: this.settings.personal_url,
-    };
-    let admin = {
-      title: t("ncdownloader", "Admin Settings"),
-      url: this.settings.admin_url,
-    };
+    const cfg = this.settings || {};
     return {
-      personal: personal,
-      admin: admin,
-      isAdmin: this.settings.is_admin,
+      personal: {
+        title: t("ncdownloader", "Personal Settings"),
+        url: cfg.personal_url || "#",
+      },
+      admin: {
+        title: t("ncdownloader", "Admin Settings"),
+        url: cfg.admin_url || "#",
+      },
+      isAdmin: Boolean(cfg.is_admin),
       sectionName: t("ncdownloader", "Settings"),
       errorText: t("ncdownloader", "Hide Errors"),
-      toggleStatus: helper.str2Boolean(this.settings.ncd_hide_errors),
-      btStatus: helper.str2Boolean(this.settings.ncd_disable_bt),
+      toggleStatus: helper.str2Boolean(String(cfg.ncd_hide_errors || "")),
+      btStatus: helper.str2Boolean(String(cfg.ncd_disable_bt || "")),
       errorTooltip: t("ncdownloader", "Enable this to hide errors"),
-      btTooltip: t("ncdownload", "Disable BT for non-admin users"),
+      btTooltip: t("ncdownloader", "Disable BT for non-admin users"),
     };
   },
-  created() {},
   methods: {
     toggle(name, value) {
-      let data = {};
+      const data = {};
       data[name] = value ? 1 : 0;
-      let path = (name == "ncd_disable_bt") ? "/admin/save" : "/personal/save";
+      const path = name === "ncd_disable_bt" ? "/admin/save" : "/personal/save";
       const url = helper.generateUrl(basePath + path);
       helper.httpClient(url)
         .setData(data)
         .setHandler((resp) => {
-          if (resp["message"]) {
-            helper.message(t("ncdownloader", resp["message"]), 1000);
+          if (resp && resp.message) {
+            helper.message(t("ncdownloader", resp.message), 1000);
           }
         })
         .send();
@@ -83,7 +81,6 @@ export default {
   components: {
     toggleButton,
   },
-  mounted() {},
 };
 </script>
 

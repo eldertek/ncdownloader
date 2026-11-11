@@ -45,12 +45,12 @@ class RunOptions
 
     public function add($option)
     {
-        $option = trim($option);
-        if ($i = $this->find($option)) {
+        $option = trim((string) $option);
+        if (($i = $this->find($option)) !== false) {
             $this->options[$i] = $option;
             return $this;
         }
-        array_push($this->options, $option);
+        $this->options[] = $option;
         return $this;
     }
     protected function find($option)

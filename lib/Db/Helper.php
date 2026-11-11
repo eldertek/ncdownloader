@@ -1,150 +1,219 @@
 <?php
+
 namespace OCA\NCDownloader\Db;
+
 use OCA\NCDownloader\Tools\Helper as ToolsHelper;
+use OCP\DB\QueryBuilder\IQueryBuilder;
+use OCP\IConfig;
+use OCP\IDBConnection;
 
 class Helper
 {
-    //@var OC\DB\ConnectionAdapter
-    private $conn;
-    private $table = "ncdownloader_info";
-    private $prefixedTable;
-    public $queryBuilder;
+    private IDBConnection $conn;
+    private string $table = 'ncdownloader_info';
+    public IQueryBuilder $queryBuilder;
 
-    public function __construct()
+    public function __construct(?IDBConnection $conn = null)
     {
-        $this->conn = \OC::$server->get(\OCP\IDBConnection::class);
+        $this->conn = $conn ?? \OC::$server->get(IDBConnection::class);
         $this->queryBuilder = $this->conn->getQueryBuilder();
-        $this->prefixedTable = $this->queryBuilder->getTableName($this->table);
-        //$container = \OC::$server->query(\OCP\IServerContainer::class);
-        //ToolsHelper::debug(get_class($container->query(\OCP\RichObjectStrings\IValidator::class)));
-        //$this->conn = \OC::$server->query(Connection::class);//working only with 22
-        //$this->connAdapter = \OC::$server->getDatabaseConnection();
-        //$this->conn = $this->connAdapter->getInner();
     }
 
-    public function insert($insert)
+    public function encodeExtra($extra): string
     {
-        $inserted = (bool) $this->conn->insertIfNotExist('*PREFIX*' . $this->table, $insert, [
-            'gid',
-        ]);
-        return $inserted;
+        if (is_array($extra)) {
+            return base64_encode(serialize($extra));
+        }
+        if (is_string($extra) && $extra !== '') {
+            return base64_encode($extra);
+        }
+        return '';
     }
-    public function getAll()
+
+    public function insert(array $insert): bool
     {
-        //OC\DB\QueryBuilder\QueryBuilder
-        $queryBuilder = $this->queryBuilder
+        $gid = (string) ($insert['gid'] ?? '');
+        if ($gid === '') {
+            return false;
+        }
+        if ($this->getByGid($gid)) {
+            return false;
+        }
+
+        if (array_key_exists('data', $insert) && $insert['data'] !== null) {
+            $insert['data'] = $this->encodeExtra($insert['data']);
+        }
+
+        $qb = $this->conn->getQueryBuilder();
+        $qb->insert($this->table);
+        $values = [];
+        foreach ($insert as $col => $val) {
+            if ($col === 'data' && $val !== null) {
+                $values[$col] = $qb->createNamedParameter($val, IQueryBuilder::PARAM_LOB);
+            } elseif (is_int($val)) {
+                $values[$col] = $qb->createNamedParameter($val, IQueryBuilder::PARAM_INT);
+            } elseif ($val === null) {
+                $values[$col] = $qb->createNamedParameter(null, IQueryBuilder::PARAM_NULL);
+            } else {
+                $values[$col] = $qb->createNamedParameter((string) $val, IQueryBuilder::PARAM_STR);
+            }
+        }
+        $qb->values($values);
+        return $qb->executeStatement() > 0;
+    }
+
+    public function getAll(): array
+    {
+        $qb = $this->conn->getQueryBuilder();
+        $result = $qb
             ->select('filename', 'type', 'gid', 'timestamp', 'status')
             ->from($this->table)
-            ->execute();
-        return $queryBuilder->fetchAll();
+            ->executeQuery();
+        $rows = $result->fetchAll();
+        $result->closeCursor();
+        return $rows;
     }
 
-    public function getByUid($uid)
+    public function getByUid(string $uid): array
     {
-        $queryBuilder = $this->queryBuilder
+        $qb = $this->conn->getQueryBuilder();
+        $result = $qb
             ->select('*')
             ->from($this->table)
-            ->where('uid = :uid')
-            ->setParameter('uid', $uid)
-            ->execute();
-        return $queryBuilder->fetchAll();
+            ->where($qb->expr()->eq('uid', $qb->createNamedParameter($uid)))
+            ->executeQuery();
+        $rows = $result->fetchAll();
+        $result->closeCursor();
+        return $rows;
     }
 
-    public function getUidByGid($gid)
+    public function getUidByGid(string $gid)
     {
-        $queryBuilder = $this->queryBuilder
+        $qb = $this->conn->getQueryBuilder();
+        $result = $qb
             ->select('uid')
             ->from($this->table)
-            ->where('gid = :gid')
-            ->setParameter('gid', $gid)
-            ->execute();
-        return $queryBuilder->fetchColumn();
+            ->where($qb->expr()->eq('gid', $qb->createNamedParameter($gid)))
+            ->executeQuery();
+        $val = $result->fetchOne();
+        $result->closeCursor();
+        return $val;
     }
 
-    public function getYtdlByUid($uid)
+    public function getYtdlByUid(string $uid): array
     {
-        $qb = $this->queryBuilder
+        $qb = $this->conn->getQueryBuilder();
+        $result = $qb
             ->select('*')
             ->from($this->table)
-            ->where('uid = :uid')
-            ->andWhere('type = :type')
-            ->setParameter('uid', $uid)
-            ->setParameter('type', ToolsHelper::DOWNLOADTYPE['YOUTUBE-DL'])
+            ->where($qb->expr()->eq('uid', $qb->createNamedParameter($uid)))
+            ->andWhere($qb->expr()->eq('type', $qb->createNamedParameter(ToolsHelper::DOWNLOADTYPE['YOUTUBE-DL'], IQueryBuilder::PARAM_INT)))
             ->orderBy('id', 'DESC')
-            ->execute();
-        return $qb->fetchAll();
+            ->executeQuery();
+        $rows = $result->fetchAll();
+        $result->closeCursor();
+        return $rows;
     }
 
-    public function getByGid($gid)
+    public function getByGid(string $gid)
     {
-        $queryBuilder = $this->queryBuilder
+        $qb = $this->conn->getQueryBuilder();
+        $result = $qb
             ->select('*')
             ->from($this->table)
-            ->where('gid = :gid')
-            ->setParameter('gid', $gid)
-            ->execute();
-        return $queryBuilder->fetch();
+            ->where($qb->expr()->eq('gid', $qb->createNamedParameter($gid)))
+            ->executeQuery();
+        $row = $result->fetch();
+        $result->closeCursor();
+        return $row;
     }
 
-    public function save(array $keys, $values = array(), $conditions = array())
+    public function save(array $data): bool
     {
-        return $this->conn->setValues($this->table, $keys, $values, $conditions);
+        return $this->insert($data);
     }
 
-    public function deleteByGid($gid)
+    public function deleteByGid(string $gid): int
     {
-        $qb = $this->queryBuilder
+        $qb = $this->conn->getQueryBuilder();
+        return $qb
             ->delete($this->table)
-            ->where('gid = :gid')
-            ->setParameter('gid', $gid);
-        return $qb->execute();
-    }
-    public function executeUpdate($sql, $values)
-    {
-        return $this->conn->executeUpdate($sql, $values);
+            ->where($qb->expr()->eq('gid', $qb->createNamedParameter($gid)))
+            ->executeStatement();
     }
 
-    public function updateStatus($gid, $status = 1)
+    public function updateStatus(string $gid, int $status = 1): int
     {
-        $query = $this->queryBuilder;
-        $query->update($this->table)
-            ->set("status", $query->createNamedParameter($status))
-            ->where('gid = :gid')
-            ->setParameter('gid', $gid);
-        return $query->execute();
-        //$sql = sprintf("UPDATE %s set status = ? WHERE gid = ?", $this->prefixedTable);
-        //$this->execute($sql, [$status, $gid]);
+        $qb = $this->conn->getQueryBuilder();
+        return $qb
+            ->update($this->table)
+            ->set('status', $qb->createNamedParameter($status, IQueryBuilder::PARAM_INT))
+            ->where($qb->expr()->eq('gid', $qb->createNamedParameter($gid)))
+            ->executeStatement();
     }
 
-    public function updateFilename($gid, $filename)
+    public function updateFilename(string $gid, string $filename, bool $onlyIfUnknown = true): int
     {
-        $query = $this->queryBuilder;
-        $query->update($this->table)
-            ->set("filename", $query->createNamedParameter($filename))
-            ->where('gid = :gid')
-            ->andWhere('filename = :filename')
-            ->setParameter('gid', $gid)
-            ->setParameter('filename', 'unknown');
-        return $query->execute();
+        $qb = $this->conn->getQueryBuilder();
+        $qb->update($this->table)
+            ->set('filename', $qb->createNamedParameter($filename))
+            ->where($qb->expr()->eq('gid', $qb->createNamedParameter($gid)));
+        if ($onlyIfUnknown) {
+            $qb->andWhere($qb->expr()->eq('filename', $qb->createNamedParameter('unknown')));
+        }
+        return $qb->executeStatement();
+    }
+
+    public function updateProgress(string $gid, string $filesize, string $speed, string $progress): int
+    {
+        $qb = $this->conn->getQueryBuilder();
+        return $qb
+            ->update($this->table)
+            ->set('filesize', $qb->createNamedParameter($filesize))
+            ->set('speed', $qb->createNamedParameter($speed))
+            ->set('progress', $qb->createNamedParameter($progress))
+            ->where($qb->expr()->eq('gid', $qb->createNamedParameter($gid)))
+            ->executeStatement();
     }
 
     public function getDBType(): string
     {
-        return \OC::$server->get(\OCP\IConfig::class)->getSystemValue('dbtype', "mysql");
+        return (string) \OC::$server->get(IConfig::class)->getSystemValue('dbtype', 'mysql');
     }
 
-    public function getExtra($data)
+    public function getExtra($data): array
     {
-        if ($this->getDBType() == "pgsql" && is_resource($data)) {
-            if (function_exists("pg_unescape_bytea")) {
-                $extra = pg_unescape_bytea(stream_get_contents($data));
-            }
-            else {
-                $extra = stream_get_contents($data);
-            }
-            return unserialize($extra);
+        if ($data === null || $data === '') {
+            return [];
         }
-        return unserialize($data);
-    }
+        if (is_resource($data)) {
+            $raw = (string) stream_get_contents($data);
+        } else {
+            $raw = (string) $data;
+        }
+        if ($raw === '') {
+            return [];
+        }
 
+        // PostgreSQL hex bytea format (\x...)
+        if (str_starts_with($raw, '\\x')) {
+            $hexDecoded = @hex2bin(substr($raw, 2));
+            if (is_string($hexDecoded) && $hexDecoded !== '') {
+                $raw = $hexDecoded;
+            }
+        }
+
+        // Base64-encoded serialized payload
+        $b64 = base64_decode($raw, true);
+        if (is_string($b64) && $b64 !== '') {
+            $parsed = @unserialize($b64, ['allowed_classes' => false]);
+            if (is_array($parsed)) {
+                return $parsed;
+            }
+        }
+
+        // Legacy direct serialized payload
+        $parsed = @unserialize($raw, ['allowed_classes' => false]);
+        return is_array($parsed) ? $parsed : [];
+    }
 }

@@ -2,123 +2,137 @@
 
 namespace OCA\NCDownloader\Tools;
 
-use Exception;
-use OCA\NCDownloader\Search\Sites\searchInterface;
+use OCA\NCDownloader\Aria2\Aria2;
 use OCA\NCDownloader\Aria2\Options as aria2Options;
 use OCA\NCDownloader\Db\Settings;
-use OCP\IUser;
-use OC\Files\Filesystem;
-use Psr\Log\LoggerInterface;
-use OCA\NCDownloader\Aria2\Aria2;
-use OCA\NCDownloader\Ytdl\Ytdl;
 use OCA\NCDownloader\Http\Client;
-
-require __DIR__ . "/../../vendor/autoload.php";
+use OCA\NCDownloader\Search\Sites\searchInterface;
+use OCA\NCDownloader\Ytdl\Ytdl;
+use OCP\App\IAppManager;
+use OCP\Files\Folder;
+use OCP\Files\IRootFolder;
+use OCP\ICacheFactory;
+use OCP\IConfig;
+use OCP\IDBConnection;
+use OCP\IGroupManager;
+use OCP\IL10N;
+use OCP\ILogger;
+use OCP\IUser;
+use OCP\IUserSession;
+use OCP\Server;
+use Psr\Log\LoggerInterface;
 
 class Helper
 {
     public const DOWNLOADTYPE = ['ARIA2' => 1, 'YOUTUBE-DL' => 2, 'OTHERS' => 3];
     public const STATUS = ['ACTIVE' => 1, 'PAUSED' => 2, 'COMPLETE' => 3, 'WAITING' => 4, 'ERROR' => 5];
-    const MAXFILELEN = 255;
+    public const MAXFILELEN = 255;
 
-    public static function isUrl($URL)
+    public static function isUrl(string $url): bool
     {
-        $URLPattern = '%^(?:(?:https?|ftp)://)(?:\S+(?::\S*)?@|\d{1,3}(?:\.\d{1,3}){3}|(?:(?:[a-z\d\x{00a1}-\x{ffff}'
+        $urlPattern = '%^(?:(?:https?|ftps?)://)(?:\S+(?::\S*)?@|\d{1,3}(?:\.\d{1,3}){3}|(?:(?:[a-z\d\x{00a1}-\x{ffff}'
             . ']+-?)*[a-z\d\x{00a1}-\x{ffff}]+)(?:\.(?:[a-z\d\x{00a1}-\x{ffff}]+-?)*[a-z\d\x{00a1}-\x{ffff}]+)*(?:\.'
-            . '[a-z\x{00a1}-\x{ffff}]{2,6}))(?::\d+)?(?:[^\s]*)?$%iu';
+            . '[a-z\x{00a1}-\x{ffff}]{2,}))(?::\d+)?(?:[^\s]*)?$%iu';
 
-        preg_match($URLPattern, $URL, $Matches);
-        if (count($Matches) === 1) {
-            return true;
-        }
+        return preg_match($urlPattern, $url) === 1;
+    }
+
+    public static function isMagnet(string $url): bool
+    {
+        $scheme = (string) parse_url($url, PHP_URL_SCHEME);
+        return strtolower($scheme) === 'magnet';
+    }
+
+    public static function isHttp(string $url): bool
+    {
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        return in_array($scheme, ['http', 'https'], true);
+    }
+
+    public static function isFtp(string $url): bool
+    {
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        return in_array($scheme, ['ftp', 'ftps'], true);
+    }
+
+    public static function isGetUrlSite(string $url): bool
+    {
         return false;
     }
 
-    public static function isMagnet($url)
+    public static function parseUrl(string $url): array
     {
-        $scheme = parse_url($url, PHP_URL_SCHEME);
-        return strtolower($scheme) == "magnet";
-    }
-    public static function isHttp($url)
-    {
-        $scheme = parse_url($url, PHP_URL_SCHEME);
-        return (in_array($scheme, array('http', 'https')));
-    }
-    public static function isFtp($url)
-    {
-        $scheme = parse_url($url, PHP_URL_SCHEME);
-        return strtolower($scheme) == "ftp";
-    }
-    public static function isGetUrlSite($url)
-    {
-        $host = parse_url($url, PHP_URL_HOST);
-        //$sites = ['twitter.com', 'www.twitter.com'];
-        $sites = [];
-        return (bool) (in_array($host, $sites));
-    }
-    public static function parseUrl($url)
-    {
-        parse_str(str_replace('tr=', 'tr[]=', parse_url($url, PHP_URL_QUERY)), $query);
+        $rawQuery = (string) parse_url($url, PHP_URL_QUERY);
+        parse_str(str_replace('tr=', 'tr[]=', $rawQuery), $query);
         return $query;
     }
 
-    public static function getUrlPath($url)
+    public static function getUrlPath(string $url): string
     {
-        $path = parse_url($url, PHP_URL_PATH);
+        $path = (string) parse_url($url, PHP_URL_PATH);
         $filename = self::cleanString(urldecode(basename($path)));
         return self::clipFilename($filename);
     }
-    public static function clipFilename($filename)
+
+    public static function clipFilename(string $filename): string
     {
+        $filename = basename($filename);
         if (($len = strlen($filename)) > self::MAXFILELEN) {
             return substr($filename, $len - self::MAXFILELEN);
         }
         return $filename;
     }
-    public static function getFilename($url): string
+
+    public static function getFilename(string $url): string
     {
         if (self::isMagnet($url)) {
             $info = self::parseUrl($url);
-            $filename = $info["dn"] ?? "";
+            $filename = (string) ($info['dn'] ?? '');
         } else {
             $filename = self::getUrlPath($url);
         }
         return self::clipFilename($filename);
     }
-    public static function formatBytes($size, $precision = 2)
+
+    public static function formatBytes($size, int $precision = 2): string
     {
+        $size = (float) $size;
         if ($size < 1) {
             return '0';
         }
         $base = log($size, 1024);
-        $suffixes = array('', 'K', 'M', 'G', 'T');
-        return round(pow(1024, $base - floor($base)), $precision) . ' ' . $suffixes[floor($base)];
+        $suffixes = ['', 'K', 'M', 'G', 'T', 'P'];
+        $idx = min((int) floor($base), count($suffixes) - 1);
+        return round(pow(1024, $base - $idx), $precision) . ' ' . $suffixes[$idx];
     }
 
-    public static function checkMediaType($url, $type = 'video/mp4')
+    public static function checkMediaType(string $url, string $type = 'video/mp4'): bool
     {
         $result = parse_url($url);
-        if (isset($result['scheme']) && self::isHttp($url)) {
+        if (is_array($result) && isset($result['scheme']) && self::isHttp($url)) {
             if (isset($result['query'])) {
                 parse_str($result['query'], $output);
                 if (!isset($output['mime'])) {
                     return false;
                 }
+                return $output['mime'] === trim($type);
             }
-            return (bool) ($output['mime'] == trim($type));
         }
         return false;
     }
 
-    public static function isYoutubeType($url)
+    public static function isYoutubeType(string $url): bool
     {
-        $regex = '%^(?:(?:https?)://)(?:[a-z0-9_]*\.)?(?:twitter|ytdl)\.com/%i';
+        $regex = '%^(?:https?://)(?:[a-z0-9_]*\.)?(?:twitter|ytdl)\.com/%i';
         return (bool) preg_match($regex, $url);
     }
 
-    public static function cleanString($string)
+    public static function cleanString(?string $string): string
     {
-        $replace = array(
+        if ($string === null || $string === '') {
+            return '';
+        }
+        $replace = [
             '/[áàâãªä]/u' => 'a',
             '/[ÁÀÂÃÄ]/u' => 'A',
             '/[ÍÌÎÏ]/u' => 'I',
@@ -129,36 +143,38 @@ class Helper
             '/[ÓÒÔÕÖ]/u' => 'O',
             '/[úùûü]/u' => 'u',
             '/[ÚÙÛÜ]/u' => 'U',
-            '/ç/' => 'c',
-            '/Ç/' => 'C',
-            '/ñ/' => 'n',
-            '/Ñ/' => 'N',
-            '/–/' => '-', // UTF-8 hyphen to "normal" hyphen
-            '/[’‘‹›‚]/u' => '', // Literally a single quote
-            '/[“”«»„]/u' => '', // Double quote
-            //'/ /' => '_', // nonbreaking space(equiv. to 0x160)
-            // '/[^a-z0-9_\s.-]/i' => '_',
-        );
-        return preg_replace(array_keys($replace), array_values($replace), $string);
+            '/ç/u' => 'c',
+            '/Ç/u' => 'C',
+            '/ñ/u' => 'n',
+            '/Ñ/u' => 'N',
+            '/[\x{2013}\x{2014}]/u' => '-',
+            '/[\x{2018}\x{2019}\x{2039}\x{203a}\x{201a}]/u' => '',
+            '/[\x{201c}\x{201d}\x{00ab}\x{00bb}\x{201e}]/u' => '',
+        ];
+        return (string) preg_replace(array_keys($replace), array_values($replace), $string);
     }
 
-    public static function debug($msg)
+    public static function debug($msg): void
     {
         if (is_array($msg)) {
-            $msg = implode(",", $msg);
+            $msg = implode(',', array_map('strval', $msg));
         }
         $logger = self::getLogger();
-        $logger->error($msg, ['app' => 'ncdownloader']);
+        $logger->error((string) $msg, ['app' => 'ncdownloader']);
     }
 
-    public static function log($msg, $file = "/tmp/nc.log")
+    public static function log($msg, string $file = '/tmp/nc.log'): void
     {
-        file_put_contents($file, print_r($msg, true), FILE_APPEND);
+        @file_put_contents($file, print_r($msg, true), FILE_APPEND);
     }
-    public static function filterData($data, $filter = null)
+
+    public static function filterData($data, ?array $filter = null): array
     {
-        if (!isset($filter)) {
-            $filter = array(
+        if (!is_array($data)) {
+            return [];
+        }
+        if ($filter === null) {
+            $filter = [
                 'status',
                 'followedBy',
                 'totalLength',
@@ -172,126 +188,133 @@ class Helper
                 'connections',
                 'gid',
                 'following',
-            );
+            ];
         }
-        $value = array_filter($data, function ($k) use ($filter) {
-            return (in_array($k, $filter));
+        return array_filter($data, function ($k) use ($filter) {
+            return in_array($k, $filter, true);
         }, ARRAY_FILTER_USE_KEY);
-        return $value;
     }
 
-    public function getFolderName($folder, $prefix)
+    public function getFolderName(string $folder, string $prefix): string
     {
         $folder = ltrim($folder, $prefix);
-        return substr($folder, 0, strpos($folder, '/'));
+        $pos = strpos($folder, '/');
+        return $pos !== false ? substr($folder, 0, $pos) : $folder;
     }
 
-    public static function Download($url, $file = null)
+    public static function Download(string $url, ?string $file = null): void
     {
-        if (!isset($file)) {
-            $file = "/tmp/" . self::getFilename($url);
+        $check = UrlValidator::validate($url, ['http', 'https']);
+        if (!$check['valid']) {
+            throw new \InvalidArgumentException($check['error'] ?? 'Invalid download URL');
         }
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($ch, CURLOPT_HEADER, 1);
-        curl_setopt($ch, CURLOPT_BINARYTRANSFER, 1);
-        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, 1);
-        $result = curl_exec($ch);
-        if (curl_errno($ch)) {
-            $error = 'Error:' . curl_error($ch);
+        if ($file === null) {
+            $file = '/tmp/' . self::getFilename($url);
         }
-        curl_close($ch);
-        if (isset($error)) {
-            throw new \Exception($error);
-        } else {
-            if (!file_put_contents($file, $result)) {
-                throw new \Exception("failed to save " . $file);
-            }
+        $client = Client::create(['max_redirects' => 5, 'timeout' => 120]);
+        $response = $client->request('GET', $url);
+        if ($response->getStatusCode() < 200 || $response->getStatusCode() >= 400) {
+            throw new \RuntimeException('HTTP status ' . $response->getStatusCode());
+        }
+        if (file_put_contents($file, $response->getContent()) === false) {
+            throw new \RuntimeException('Failed to save ' . $file);
         }
     }
 
-    public static function is_function_enabled($function_name)
+    public static function is_function_enabled(string $function_name): bool
     {
         if (!function_exists($function_name)) {
             return false;
         }
-        $ini = \OC::$server->getIniWrapper();
-        $disabled = explode(',', $ini->get('disable_functions') ?: '');
-        $disabled = array_map('trim', $disabled);
-        if (in_array($function_name, $disabled)) {
+        $disabled = array_map('trim', explode(',', (string) ini_get('disable_functions')));
+        if (in_array($function_name, $disabled, true)) {
             return false;
         }
-        $disabled = explode(',', $ini->get('suhosin.executor.func.blacklist') ?: '');
-        $disabled = array_map('trim', $disabled);
-        if (in_array($function_name, $disabled)) {
+        $blacklist = array_map('trim', explode(',', (string) ini_get('suhosin.executor.func.blacklist')));
+        if (in_array($function_name, $blacklist, true)) {
             return false;
         }
         return true;
     }
 
-    public static function findBinaryPath($program, $default = null)
+    public static function findBinaryPath(string $program, ?string $default = null): ?string
     {
-        $memcache = \OC::$server->getMemCacheFactory()->createDistributed('findBinaryPath');
+        $memcache = Server::get(ICacheFactory::class)->createDistributed('findBinaryPath');
         if ($memcache->hasKey($program)) {
-            return $memcache->get($program);
+            $cached = $memcache->get($program);
+            if (is_string($cached) && @is_file($cached)) {
+                return $cached;
+            }
         }
-        $dataPath = \OC::$server->get(\OCP\IConfig::class)->getSystemValue('datadirectory');
-        $paths = ['/usr/local/sbin', '/usr/local/bin', '/usr/sbin', '/usr/bin', '/sbin', '/bin', '/opt/bin', $dataPath . "/bin"];
-        $result = $default;
+        $dataPath = self::getDataDir();
+        $paths = [
+            '/usr/local/sbin',
+            '/usr/local/bin',
+            '/usr/sbin',
+            '/usr/bin',
+            '/sbin',
+            '/bin',
+            '/opt/bin',
+            rtrim($dataPath, '/') . '/bin',
+        ];
         $exeSniffer = new ExecutableFinder();
-        // Returns null if nothing is found
         $result = $exeSniffer->find($program, $default, $paths);
-        if ($result) {
-            // store the value for 5 minutes
+        if ($result && @is_file($result)) {
             $memcache->set($program, $result, 300);
+            return $result;
         }
-        return $result;
+        return $default;
     }
 
-    public static function formatInterval($interval, $granularity = 2)
+    public static function formatInterval($interval, int $granularity = 2): string
     {
-        $units = array(
+        $interval = max(0, (int) round((float) $interval));
+        $units = [
             '1 year|years' => 31536000,
-            '1 monthmonths' => 2592000,
+            '1 month|months' => 2592000,
             '1 week|weeks' => 604800,
             '1 day|days' => 86400,
             '1 hour|hours' => 3600,
             '1 min|mins' => 60,
             '1 sec|sec' => 1,
-        );
+        ];
         $output = '';
         foreach ($units as $key => $value) {
-            $key = explode('|', $key);
+            $parts = explode('|', $key);
             if ($interval >= $value) {
-                $output .= ($output ? ' ' : '') . self::formatPlural(floor($interval / $value), $key[0], $key[1]);
+                $output .= ($output ? ' ' : '') . self::formatPlural((int) floor($interval / $value), $parts[0], $parts[1]);
                 $interval %= $value;
                 $granularity--;
             }
-            if ($granularity == 0) {
+            if ($granularity === 0) {
                 break;
             }
         }
-        return $output ? $output : '0 sec';
+        return $output !== '' ? $output : '0 sec';
     }
 
-    public static function formatPlural($count, $singular, $plural)
+    public static function formatPlural(int $count, string $singular, string $plural): string
     {
-        if ($count == 1) {
+        if ($count === 1) {
             return $singular;
-        } else {
-            return $count . " " . $plural;
         }
+        return $count . ' ' . $plural;
     }
-    public static function aria2Options()
+
+    public static function aria2Options(): array
     {
         return aria2Options::get();
     }
 
-    public static function getTableTitles($type = null)
+    public static function aria2UserOptions(): array
+    {
+        return aria2Options::getUserAllowed();
+    }
+
+    public static function getTableTitles(?string $type = null): array
     {
         $general = ['filename', 'status', 'actions'];
-        if (!isset($type)) {
+        if ($type === null) {
             return $general;
         }
         $titles = [
@@ -300,70 +323,132 @@ class Helper
             'fail' => $general,
             'complete' => $general,
         ];
-        return $titles[$type];
-    }
-    // the relative home folder of a nextcloud user,e.g. /admin/files
-    public static function getUserFolder($uid = null): string
-    {
-        if (!empty($rootFolder = Filesystem::getRoot())) {
-            return $rootFolder;
-        } else if (isset($uid)) {
-            return "/" . $uid . "/files";
-        }
-        return '';
+        return $titles[$type] ?? $general;
     }
 
-    public static function generateGID($str = null)
+    public static function getUserFolder(?string $uid = null): string
     {
-        if (isset($str)) {
+        $uid = $uid ?? self::getUID();
+        if ($uid === '') {
+            return '';
+        }
+        try {
+            /** @var IRootFolder $rootFolder */
+            $rootFolder = \OC::$server->get(IRootFolder::class);
+            return $rootFolder->getUserFolder($uid)->getPath();
+        } catch (\Throwable $e) {
+            return '/' . $uid . '/files';
+        }
+    }
+
+    public static function ensureUserSubFolder(string $relativePath, ?string $uid = null): ?Folder
+    {
+        $uid = $uid ?? self::getUID();
+        if ($uid === '') {
+            return null;
+        }
+        try {
+            /** @var IRootFolder $rootFolder */
+            $rootFolder = \OC::$server->get(IRootFolder::class);
+            $userFolder = $rootFolder->getUserFolder($uid);
+            $cleanRel = trim(str_replace('\\', '/', $relativePath), '/');
+            if ($cleanRel === '') {
+                return $userFolder;
+            }
+            $current = $userFolder;
+            foreach (explode('/', $cleanRel) as $segment) {
+                if ($segment === '' || $segment === '.' || $segment === '..') {
+                    continue;
+                }
+                if ($current->nodeExists($segment)) {
+                    $node = $current->get($segment);
+                    if ($node instanceof Folder) {
+                        $current = $node;
+                    } else {
+                        return null;
+                    }
+                } else {
+                    $current = $current->newFolder($segment);
+                }
+            }
+            return $current;
+        } catch (\Throwable $e) {
+            self::debug($e->getMessage());
+            return null;
+        }
+    }
+
+    public static function generateGID(?string $str = null): string
+    {
+        if ($str !== null) {
             return md5($str);
         }
-        return sprintf('%04x%04x%04x%04x%04x%04x%04x%04x', mt_rand(0, 65535), mt_rand(0, 65535), mt_rand(0, 65535), mt_rand(16384, 20479), mt_rand(0, 65535), mt_rand(0, 65535), mt_rand(0, 65535), mt_rand(16384, 20479));
+        return sprintf(
+            '%04x%04x%04x%04x%04x%04x%04x%04x',
+            mt_rand(0, 65535),
+            mt_rand(0, 65535),
+            mt_rand(0, 65535),
+            mt_rand(16384, 20479),
+            mt_rand(0, 65535),
+            mt_rand(0, 65535),
+            mt_rand(0, 65535),
+            mt_rand(16384, 20479)
+        );
     }
-    public static function ffmpegInstalled()
+
+    public static function ffmpegInstalled(): bool
     {
         return (bool) self::findBinaryPath('ffmpeg');
     }
-    // filename without extension
-    public static function getBasicFilename($path)
+
+    public static function getBasicFilename(string $path): string
     {
         return pathinfo($path, PATHINFO_FILENAME);
     }
-    public static function sanitize($string)
+
+    public static function sanitize($value)
     {
-        return filter_var($string, FILTER_SANITIZE_STRING);
+        if (!is_string($value)) {
+            return $value;
+        }
+        $clean = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $value);
+        return trim(strip_tags((string) $clean));
     }
 
-    public static function doSignal($pid, $signal): bool
+    public static function doSignal(int $pid, int $signal): bool
     {
-        if (\function_exists('posix_kill')) {
-            $ok = @posix_kill($pid, $signal);
-        } elseif ($ok = proc_open(sprintf('kill -%d %d', $signal, $pid), [2 => ['pipe', 'w']], $pipes)) {
-            $ok = false === fgets($pipes[2]);
-        }
-
-        if (!$ok) {
+        if ($pid <= 0) {
             return false;
         }
-        return true;
+        if (\function_exists('posix_kill')) {
+            return (bool) @posix_kill($pid, $signal);
+        }
+        $proc = @proc_open(sprintf('kill -%d %d', $signal, $pid), [2 => ['pipe', 'w']], $pipes);
+        if (is_resource($proc)) {
+            $err = fgets($pipes[2]);
+            fclose($pipes[2]);
+            proc_close($proc);
+            return $err === false;
+        }
+        return false;
     }
 
-    public static function isRunning($pid)
+    public static function isRunning($pid): bool
     {
-        return self::doSignal($pid, 0);
+        return self::doSignal((int) $pid, 0);
     }
 
-    public static function stop($pid)
+    public static function stop($pid): bool
     {
-        return self::doSignal($pid, 9);
+        return self::doSignal((int) $pid, 9);
     }
 
     public static function pythonInstalled(): bool
     {
-        return (self::findBinaryPath('python') || self::findBinaryPath('python3'));
+        return (bool) (self::findBinaryPath('python3') || self::findBinaryPath('python'));
     }
 
-    public static function findSearchSites($dir, $suffix = 'php'): array
+    public static function findSearchSites(string $dir, string $suffix = 'php'): array
     {
         $filetool = File::create($dir, $suffix);
         $files = $filetool->scandir();
@@ -372,7 +457,7 @@ class Helper
             $basename = File::getBasename($file);
             $namespace = 'OCA\\NCDownloader\\Search\\Sites\\';
             $className = $namespace . $basename;
-            if (in_array(searchInterface::class, class_implements($className))) {
+            if (class_exists($className) && in_array(searchInterface::class, class_implements($className) ?: [], true)) {
                 $sites[] = ['class' => $className, 'name' => $basename];
             }
         }
@@ -382,278 +467,334 @@ class Helper
     public static function getSearchSites(): array
     {
         $key = 'searchSites';
-        $memcache = \OC::$server->getMemCacheFactory()->createDistributed($key);
+        $memcache = Server::get(ICacheFactory::class)->createDistributed($key);
         if ($memcache->hasKey($key)) {
-            $sites = $memcache->get($key);
-        } else {
-            try {
-                $sites = Helper::findSearchSites(__DIR__ . "/../Search/Sites/");
-                $memcache->set($key, $sites, 300);
-            } catch (\Exception $e) {
-                self::debug($e->getMessage());
+            $cached = $memcache->get($key);
+            if (is_array($cached)) {
+                return $cached;
             }
+        }
+        $sites = [];
+        try {
+            $sites = self::findSearchSites(__DIR__ . '/../Search/Sites/');
+            $memcache->set($key, $sites, 300);
+        } catch (\Throwable $e) {
+            self::debug($e->getMessage());
         }
         return $sites;
     }
 
-    public static function getMountPoints(): ?array
-    {
-        return Filesystem::getMountPoints("/");
-    }
-
     public static function getDataDir(): string
     {
-        return \OC::$server->get(\OCP\IConfig::class)->getSystemValue('datadirectory');
+        return (string) \OC::$server->get(IConfig::class)->getSystemValue('datadirectory', '/var/www/html/data');
     }
 
-    public static function getLocalFolder(string $path): string
+    public static function getLocalFolder(string $path, ?string $uid = null): string
     {
-        if (self::getUID()) {
-            \OC_Util::setupFS();
-            //get the real path of the file in the filesystem
-            return \OC\Files\Filesystem::getLocalFile($path);
+        $uid = $uid ?? self::getUID();
+        if ($uid === '') {
+            return '';
         }
-        return "";
+        $folder = self::ensureUserSubFolder($path, $uid);
+        if ($folder !== null) {
+            $local = $folder->getStorage()->getLocalFile($folder->getInternalPath());
+            if (is_string($local) && $local !== '') {
+                if (!is_dir($local)) {
+                    @mkdir($local, 0755, true);
+                }
+                return $local;
+            }
+        }
+        $cleanRel = trim(str_replace(['\\', '..'], ['/', ''], $path), '/');
+        $fallback = rtrim(self::getDataDir(), '/') . '/' . $uid . '/files' . ($cleanRel !== '' ? '/' . $cleanRel : '');
+        if (!is_dir($fallback)) {
+            @mkdir($fallback, 0755, true);
+        }
+        return $fallback;
     }
 
-    public static function getRealDownloadDir(): string
+    public static function getRealDownloadDir(?string $uid = null): string
     {
-        $dlDir = self::getDownloadDir();
-        return self::getLocalFolder($dlDir);
+        $dlDir = self::getDownloadDir($uid);
+        return self::getLocalFolder($dlDir, $uid);
     }
-    public static function getRealTorrentsDir(): string
+
+    public static function getRealTorrentsDir(?string $uid = null): string
     {
-        $dir = self::getSettings('ncd_torrents_dir', "/Torrents");
-        return self::getLocalFolder($dir);
+        $dir = (string) (self::newSettings($uid)->get('ncd_torrents_dir', '/Torrents') ?: '/Torrents');
+        return self::getLocalFolder($dir, $uid);
     }
 
     public static function getUser(): ?IUser
     {
-        return \OC::$server->get(\OCP\IUserSession::class)->getUser();
+        return \OC::$server->get(IUserSession::class)->getUser();
     }
 
     public static function getUID(): string
     {
         $user = self::getUser();
-        $uid = $user ? $user->getUID() : "";
-        return $uid;
+        return $user ? $user->getUID() : '';
     }
 
-    public static function getSettings($key, $default = null, int $type = Settings::TYPE['USER'])
+    public static function isAdmin(?string $uid = null): bool
     {
-        $settings = self::newSettings();
+        $uid = $uid ?? self::getUID();
+        if ($uid === '') {
+            return false;
+        }
+        /** @var IGroupManager $groupManager */
+        $groupManager = \OC::$server->get(IGroupManager::class);
+        return $groupManager->isAdmin($uid);
+    }
+
+    public static function getSettings(string $key, $default = null, int $type = Settings::TYPE['USER'], ?string $uid = null)
+    {
+        $settings = self::newSettings($uid);
         return $settings->setType($type)->get($key, $default);
     }
 
-    public static function newSettings($uid = null)
+    public static function newSettings(?string $uid = null): Settings
     {
         $uid = $uid ?? self::getUID();
         return Settings::create($uid);
     }
 
-    public static function getYtdlConfig($uid = null): array
+    public static function getYtdlConfig(?string $uid = null): array
     {
-        $config = [
-            'binary' => self::getAdminSettings("ncd_yt_binary"),
-            'downloadDir' => Helper::getRealDownloadDir(),
-            'settings' => self::newSettings()->getYtdl(),
+        $uid = $uid ?? self::getUID();
+        return [
+            'binary' => self::getAdminSettings('ncd_yt_binary'),
+            'downloadDir' => self::getRealDownloadDir($uid),
+            'settings' => self::newSettings($uid)->getYtdl(),
         ];
-        return $config;
     }
 
-    public static function getAria2Config($uid = null): array
+    public static function getAria2Config(?string $uid = null): array
     {
         $options = [];
         $uid = $uid ?? self::getUID();
         $settings = self::newSettings($uid);
-        $realDownloadDir = Helper::getRealDownloadDir();
-        $torrentsDir = Helper::getRealTorrentsDir();
+        $realDownloadDir = $uid !== '' ? self::getRealDownloadDir($uid) : '/tmp/Downloads';
+        $torrentsDir = $uid !== '' ? self::getRealTorrentsDir($uid) : '/tmp/Torrents';
         $appPath = self::getAppPath();
         $dataDir = self::getDataDir();
-        $aria2Dir = $dataDir . "/aria2";
-        $options['seed_time'] = $settings->get("ncd_seed_time");
-        $options['seed_ratio'] = $settings->get("ncd_seed_ratio");
-        if (is_array($customSettings = $settings->getAria2())) {
+        $aria2Dir = rtrim($dataDir, '/') . '/aria2';
+
+        $seedTime = $settings->get('ncd_seed_time');
+        $seedRatio = $settings->get('ncd_seed_ratio');
+        if ($seedTime !== null && $seedTime !== '') {
+            $options['seed-time'] = $seedTime;
+        }
+        if ($seedRatio !== null && $seedRatio !== '') {
+            $options['seed-ratio'] = $seedRatio;
+        }
+        $customSettings = $settings->getAria2();
+        if (is_array($customSettings)) {
             $options = array_merge($customSettings, $options);
         }
-        $token = Helper::getAdminSettings("ncd_aria2_rpc_token");
-        $rpcHost = Helper::getAdminSettings("ncd_aria2_rpc_host");
-        $rpcPort = Helper::getAdminSettings("ncd_aria2_rpc_port");
-        $binary = Helper::getAdminSettings("ncd_aria2_binary");
-        $config = [
+
+        $token = self::getAdminSettings('ncd_aria2_rpc_token');
+        $rpcHost = self::getAdminSettings('ncd_aria2_rpc_host');
+        $rpcPort = self::getAdminSettings('ncd_aria2_rpc_port');
+        $binary = self::getAdminSettings('ncd_aria2_binary');
+        $globalConf = self::getSettings('global_aria2_config', [], Settings::TYPE['SYSTEM']);
+
+        return [
             'dir' => $realDownloadDir,
             'torrentsDir' => $torrentsDir,
             'confDir' => $aria2Dir,
-            'token' =>  $token ? $token : "ncdownloader123",
+            'token' => $token !== '' ? $token : 'ncdownloader123',
             'settings' => $options,
-            'rpcHost' => $rpcHost ? $rpcHost : "127.0.0.1",
-            'rpcPort' => $rpcPort ? $rpcPort : "6800",
+            'rpcHost' => $rpcHost !== '' ? $rpcHost : '127.0.0.1',
+            'rpcPort' => $rpcPort !== '' ? $rpcPort : '6800',
             'binary' => $binary,
-            'startHook' => $appPath . "/hooks/startHook.sh",
-            'completeHook' => $appPath . "/hooks/completeHook.sh",
-            'aria2Conf' => Helper::getSettings("global_aria2_config", [], $settings::TYPE['SYSTEM'])
+            'startHook' => $appPath . '/hooks/startHook.sh',
+            'completeHook' => $appPath . '/hooks/completeHook.sh',
+            'errorHook' => $appPath . '/hooks/errorHook.sh',
+            'aria2Conf' => is_array($globalConf) ? $globalConf : [],
         ];
-        return $config;
     }
 
     public static function getAppPath(): string
     {
-        return \OC::$server->get(\OCP\App\IAppManager::class)->getAppPath('ncdownloader');
+        return \OC::$server->get(IAppManager::class)->getAppPath('ncdownloader');
     }
+
     public static function folderUpdated(string $dir): bool
     {
-        if (!file_exists($dir)) {
+        if ($dir === '' || !file_exists($dir)) {
             return false;
         }
-        $checkFile = $dir . "/.lastmodified";
+        $checkFile = rtrim($dir, '/') . '/.lastmodified';
+        clearstatcache(true, $dir);
+        $time = (int) @filemtime($dir);
 
         if (!file_exists($checkFile)) {
-            $time = \filemtime($dir);
-            file_put_contents($checkFile, $time);
-            return false;
+            @file_put_contents($checkFile, (string) $time);
+            return true;
         }
-        $lastModified = (int) file_get_contents($checkFile);
-        $time = \filemtime($dir);
+        $lastModified = (int) @file_get_contents($checkFile);
         if ($time > $lastModified) {
-            file_put_contents($checkFile, $time);
+            @file_put_contents($checkFile, (string) $time);
             return true;
         }
         return false;
     }
-    public static function getDownloadDir(): string
+
+    public static function getDownloadDir(?string $uid = null): string
     {
-        return self::getSettings('ncd_downloader_dir', "/Downloads");
+        $dir = self::newSettings($uid)->get('ncd_downloader_dir', '/Downloads');
+        return (is_string($dir) && trim($dir) !== '') ? $dir : '/Downloads';
     }
+
     public static function getVersion(): array
     {
-        $config = \OC::$server->get(\OCP\IConfig::class);
-        $version = $config->getSystemValue('version');
-        return explode(".", $version);
+        $config = \OC::$server->get(IConfig::class);
+        $version = (string) $config->getSystemValue('version', '28.0.0');
+        return explode('.', $version);
     }
-    public static function isLegacyVersion(): bool
+
+    public static function query(string $key)
     {
-        return (version_compare(implode(".", self::getVersion()), '20.0.0') < 0);
+        return \OC::$server->get($key);
     }
-    public static function query($key)
+
+    public static function getLogger(): LoggerInterface
     {
-        return self::isLegacyVersion() ? \OC::$server->query($key) : \OC::$server->get($key);
+        return \OC::$server->get(LoggerInterface::class);
     }
-    public static function getLogger()
+
+    public static function getDatabaseConnection(): IDBConnection
     {
-        return (version_compare(implode(".", self::getVersion()), '24.0.0') < 0) ? \OC::$server->getLogger() : \OC::$server->get(LoggerInterface::class);
+        return \OC::$server->get(IDBConnection::class);
     }
-    public static function getDatabaseConnection()
-    {
-        return self::isLegacyVersion() ? \OC::$server->getDatabaseConnection() : \OC::$server->get(\OCP\IDBConnection::class);
-    }
-    public static function getAdminSettings($key): string
+
+    public static function getAdminSettings(string $key): string
     {
         $settings = self::getAllAdminSettings();
-        return $settings[$key] ?? "";
+        return isset($settings[$key]) ? (string) $settings[$key] : '';
     }
+
     public static function getAllAdminSettings(): array
     {
-        return Helper::getSettings("ncd_admin_settings", [], Settings::TYPE["SYSTEM"]);
+        $val = self::getSettings('ncd_admin_settings', [], Settings::TYPE['SYSTEM']);
+        return is_array($val) ? $val : [];
     }
+
     public static function getAria2Version(): ?string
     {
-        //get aria2 instance 
         $aria2 = self::query(Aria2::class);
-        return $aria2->version();
+        $ver = $aria2->version();
+        return is_string($ver) ? $ver : null;
     }
+
     public static function getYtdlVersion(): ?string
     {
         $ytdl = self::query(Ytdl::class);
-        return $ytdl->version();
+        $ver = $ytdl->version();
+        return is_string($ver) ? $ver : null;
     }
 
-    public static function getAdminOptions($data)
+    public static function getAdminOptions(array $data): array
     {
-        $options = [
+        /** @var IL10N $l10n */
+        $l10n = \OC::$server->get(\OCP\L10N\IFactory::class)->get('ncdownloader');
+        return [
             [
-                "label" => "Aria2 RPC Host",
-                "id" => "ncd_aria2_rpc_host",
-                "value" => $data['ncd_aria2_rpc_host'] ?? "",
-                "placeholder" => $data['ncd_aria2_rpc_host'] ?? "127.0.0.1",
-                "path" => $data['path'],
+                'label' => $l10n->t('Aria2 RPC Host'),
+                'id' => 'ncd_aria2_rpc_host',
+                'value' => $data['ncd_aria2_rpc_host'] ?? '',
+                'placeholder' => !empty($data['ncd_aria2_rpc_host']) ? $data['ncd_aria2_rpc_host'] : '127.0.0.1',
+                'path' => $data['path'],
             ],
             [
-                "label" => "Aria2 RPC Port",
-                "id" => "ncd_aria2_rpc_port",
-                "value" => $data['ncd_aria2_rpc_port'] ?? "",
-                "placeholder" => $data['ncd_aria2_rpc_port'] ?? 6800,
-                "path" => $data['path'],
+                'label' => $l10n->t('Aria2 RPC Port'),
+                'id' => 'ncd_aria2_rpc_port',
+                'value' => $data['ncd_aria2_rpc_port'] ?? '',
+                'placeholder' => !empty($data['ncd_aria2_rpc_port']) ? $data['ncd_aria2_rpc_port'] : 6800,
+                'path' => $data['path'],
             ],
             [
-                "label" => "Aria2 RPC Token",
-                "id" => "ncd_aria2_rpc_token",
-                "value" => $data['ncd_aria2_rpc_token'] ?? "",
-                "placeholder" => $data['ncd_aria2_rpc_token'] ?? "ncdownloader123",
-                "path" => $data['path'],
+                'label' => $l10n->t('Aria2 RPC Token'),
+                'id' => 'ncd_aria2_rpc_token',
+                'value' => $data['ncd_aria2_rpc_token'] ?? '',
+                'placeholder' => !empty($data['ncd_aria2_rpc_token']) ? $data['ncd_aria2_rpc_token'] : 'ncdownloader123',
+                'path' => $data['path'],
             ],
             [
-                "label" => "Youtube-dl binary",
-                "id" => "ncd_yt_binary",
-                "value" => $data['ncd_yt_binary'] ?? "",
-                "placeholder" => $data['ncd_yt_binary'] ?? "/usr/bin/youtube-dl",
-                "path" => $data['path'],
+                'label' => $l10n->t('yt-dlp binary'),
+                'id' => 'ncd_yt_binary',
+                'value' => $data['ncd_yt_binary'] ?? '',
+                'placeholder' => !empty($data['ncd_yt_binary']) ? $data['ncd_yt_binary'] : '/usr/bin/yt-dlp',
+                'path' => $data['path'],
             ],
             [
-                "label" => "Aria2c binary",
-                "id" => "ncd_aria2_binary",
-                "value" => $data['ncd_aria2_binary'] ?? "",
-                "placeholder" => $data['ncd_aria2_binary'] ?? "/usr/bin/aria2c",
-                "path" => $data['path'],
-            ]
+                'label' => $l10n->t('Aria2c binary'),
+                'id' => 'ncd_aria2_binary',
+                'value' => $data['ncd_aria2_binary'] ?? '',
+                'placeholder' => !empty($data['ncd_aria2_binary']) ? $data['ncd_aria2_binary'] : '/usr/bin/aria2c',
+                'path' => $data['path'],
+            ],
         ];
-        return $options;
     }
-    public static function getLatestRelease($owner, $repo)
+
+    public static function getLatestRelease(string $owner, string $repo): ?string
     {
-        $client = Client::create();
-        $response = $client->request('GET', "https://api.github.com/repos/$owner/$repo/releases/latest", [
-            'headers' => [
-                'User-Agent' => 'PHP'
-            ]
-        ]);
-        $data = json_decode($response->getContent(), true);
-        if (isset($data['tag_name'])) {
-            return $data['tag_name'];
+        try {
+            $client = Client::create();
+            $response = $client->request('GET', "https://api.github.com/repos/$owner/$repo/releases/latest", [
+                'headers' => [
+                    'User-Agent' => 'Nextcloud-NCDownloader',
+                ],
+            ]);
+            $data = json_decode($response->getContent(), true);
+            if (is_array($data) && isset($data['tag_name'])) {
+                return (string) $data['tag_name'];
+            }
+        } catch (\Throwable $e) {
+            self::debug($e->getMessage());
         }
         return null;
     }
 
-    public static function downloadLatestRelease($owner, $repo, $file)
+    public static function downloadLatestRelease(string $owner, string $repo, string $file)
     {
-        $client = Client::create(['max_redirects' => 10]);
+        $client = Client::create(['max_redirects' => 10, 'timeout' => 120]);
         $response = $client->request('GET', "https://api.github.com/repos/$owner/$repo/releases/latest", [
             'headers' => [
-                'User-Agent' => 'PHP'
-            ]
+                'User-Agent' => 'Nextcloud-NCDownloader',
+            ],
         ]);
         $data = json_decode($response->getContent(), true);
         $downloadUrl = null;
-        foreach ($data['assets'] as $asset) {
-            if ($asset['name'] == $repo) {
-                $downloadUrl = $asset['browser_download_url'];
-                break;
+        if (is_array($data) && isset($data['assets']) && is_array($data['assets'])) {
+            foreach ($data['assets'] as $asset) {
+                if (($asset['name'] ?? '') === $repo) {
+                    $downloadUrl = $asset['browser_download_url'] ?? null;
+                    break;
+                }
             }
         }
         if ($downloadUrl) {
-            if (!is_writable(dirname($file))) {
-                throw new \Exception(dirname($file) . " is not writable");
+            $dir = dirname($file);
+            if (!is_dir($dir)) {
+                @mkdir($dir, 0755, true);
             }
-            $response = $client->request('GET', $downloadUrl);
-            if ($byte = file_put_contents($file, $response->getContent())) {
-                return $byte;
-            } else {
-                throw new \Exception("Failed to download $downloadUrl");
+            if (!is_writable($dir)) {
+                throw new \RuntimeException($dir . ' is not writable');
             }
+            $binResp = $client->request('GET', $downloadUrl);
+            $bytes = file_put_contents($file, $binResp->getContent());
+            if ($bytes !== false) {
+                return $bytes;
+            }
+            throw new \RuntimeException("Failed to download $downloadUrl");
         }
         return false;
     }
-    public static function removeLetters($str)
+
+    public static function removeLetters(string $str): string
     {
-        return preg_replace('/[^0-9.]+/', '', $str);
+        return (string) preg_replace('/[^0-9.]+/', '', $str);
     }
 }

@@ -1,5 +1,6 @@
 import {
-    generateUrl
+    generateUrl,
+    generateRemoteUrl
 } from '@nextcloud/router'
 import Toastify from 'toastify-js'
 import "toastify-js/src/toastify.css"
@@ -286,16 +287,179 @@ const helper = {
         container.setAttribute("type", name);
         container.className = "table " + name;
     },
-    filepicker(cb, currentPath) {
-        OC.dialogs.filepicker(
-            t('ncdownloader', 'Select a directory'),
-            cb,
-            false,
-            'httpd/unix-directory',
-            true,
-            OC.dialogs.FILEPICKER_TYPE_CHOOSE,
-            currentPath
-        );
+    async filepicker(cb, currentPath) {
+        const head = document.querySelector('head');
+        const uid = (head && head.getAttribute('data-user')) || '';
+        const token = (head && head.getAttribute('data-requesttoken')) || '';
+        if (!uid) {
+            const manual = window.prompt(t('ncdownloader', 'Select a directory'), currentPath || '/Downloads');
+            if (manual) {
+                cb(manual.startsWith('/') ? manual : '/' + manual);
+            }
+            return;
+        }
+
+        const existing = document.getElementById('ncd-dir-picker-overlay');
+        if (existing) {
+            existing.remove();
+        }
+
+        let activeDir = (currentPath && typeof currentPath === 'string' ? currentPath.trim() : '/Downloads') || '/';
+        if (!activeDir.startsWith('/')) {
+            activeDir = '/' + activeDir;
+        }
+        if (activeDir.length > 1 && activeDir.endsWith('/')) {
+            activeDir = activeDir.slice(0, -1);
+        }
+
+        const davRoot = (typeof generateRemoteUrl === 'function' ? generateRemoteUrl('dav') : '/remote.php/dav')
+            + '/files/' + encodeURIComponent(uid);
+
+        const fetchDirs = async (dirPath) => {
+            const clean = dirPath === '/' ? '' : dirPath.split('/').filter(Boolean).map(encodeURIComponent).join('/');
+            const url = davRoot + (clean ? '/' + clean : '') + '/';
+            const resp = await fetch(url, {
+                method: 'PROPFIND',
+                headers: {
+                    Depth: '1',
+                    requesttoken: token,
+                    'Content-Type': 'application/xml; charset=utf-8'
+                }
+            });
+            if (!resp.ok) {
+                return [];
+            }
+            const xmlText = await resp.text();
+            const doc = new window.DOMParser().parseFromString(xmlText, 'application/xml');
+            const responses = Array.from(doc.getElementsByTagNameNS('DAV:', 'response'));
+            const folders = [];
+            responses.forEach((node, idx) => {
+                if (idx === 0) {
+                    return;
+                }
+                const isCollection = node.getElementsByTagNameNS('DAV:', 'collection').length > 0;
+                if (!isCollection) {
+                    return;
+                }
+                const hrefNode = node.getElementsByTagNameNS('DAV:', 'href')[0];
+                if (!hrefNode || !hrefNode.textContent) {
+                    return;
+                }
+                const marker = '/files/' + encodeURIComponent(uid);
+                const pos = hrefNode.textContent.indexOf(marker);
+                if (pos === -1) {
+                    return;
+                }
+                let rel = decodeURIComponent(hrefNode.textContent.slice(pos + marker.length));
+                if (rel.length > 1 && rel.endsWith('/')) {
+                    rel = rel.slice(0, -1);
+                }
+                if (rel && rel !== dirPath) {
+                    folders.push(rel);
+                }
+            });
+            return folders.sort((a, b) => a.localeCompare(b));
+        };
+
+        const overlay = document.createElement('div');
+        overlay.id = 'ncd-dir-picker-overlay';
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px;';
+
+        const modal = document.createElement('div');
+        modal.style.cssText = 'background:var(--color-main-background,#fff);color:var(--color-main-text,#111);border:1px solid var(--color-border,#ccc);border-radius:10px;max-width:460px;width:100%;padding:16px;box-shadow:0 12px 32px rgba(0,0,0,0.25);display:flex;flex-direction:column;gap:10px;';
+
+        const titleEl = document.createElement('h3');
+        titleEl.textContent = t('ncdownloader', 'Select a directory');
+        titleEl.style.cssText = 'margin:0;font-size:16px;font-weight:600;';
+
+        const pathInput = document.createElement('input');
+        pathInput.type = 'text';
+        pathInput.value = activeDir;
+        pathInput.style.cssText = 'width:100%;padding:8px 10px;border:1px solid var(--color-border-dark,#94a3b8);border-radius:6px;background:var(--color-main-background,#fff);color:var(--color-main-text,#111);box-sizing:border-box;';
+
+        const listEl = document.createElement('div');
+        listEl.style.cssText = 'max-height:240px;overflow-y:auto;border:1px solid var(--color-border,#e2e8f0);border-radius:6px;padding:4px;';
+
+        const renderDir = async (dir) => {
+            activeDir = dir;
+            pathInput.value = activeDir;
+            listEl.innerHTML = '';
+            if (activeDir !== '/') {
+                const upBtn = document.createElement('div');
+                upBtn.textContent = '..';
+                upBtn.style.cssText = 'padding:8px 10px;cursor:pointer;border-radius:4px;font-weight:600;';
+                upBtn.addEventListener('click', () => {
+                    const parent = activeDir.slice(0, activeDir.lastIndexOf('/')) || '/';
+                    renderDir(parent);
+                });
+                listEl.appendChild(upBtn);
+            }
+            let dirs = [];
+            try {
+                dirs = await fetchDirs(activeDir);
+            } catch (_e) {
+                dirs = [];
+            }
+            if (dirs.length === 0 && activeDir !== '/') {
+                dirs = await fetchDirs('/');
+                if (dirs.length > 0) {
+                    activeDir = '/';
+                    pathInput.value = '/';
+                    listEl.innerHTML = '';
+                }
+            }
+            dirs.forEach((folderPath) => {
+                const row = document.createElement('div');
+                const label = folderPath.slice(folderPath.lastIndexOf('/') + 1);
+                row.textContent = label;
+                row.style.cssText = 'padding:8px 10px;cursor:pointer;border-radius:4px;';
+                row.addEventListener('mouseenter', () => {
+                    row.style.background = 'var(--color-background-hover,#f1f5f9)';
+                });
+                row.addEventListener('mouseleave', () => {
+                    row.style.background = 'transparent';
+                });
+                row.addEventListener('click', () => renderDir(folderPath));
+                listEl.appendChild(row);
+            });
+        };
+
+        const footer = document.createElement('div');
+        footer.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:4px;';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.style.cssText = 'padding:6px 14px;border-radius:6px;border:1px solid var(--color-border,#cbd5e1);background:transparent;color:var(--color-main-text,#111);cursor:pointer;';
+        cancelBtn.addEventListener('click', () => overlay.remove());
+
+        const chooseBtn = document.createElement('button');
+        chooseBtn.type = 'button';
+        chooseBtn.textContent = 'Choose';
+        chooseBtn.style.cssText = 'padding:6px 14px;border-radius:6px;border:0;background:var(--color-primary-element,#00679e);color:var(--color-primary-element-text,#fff);font-weight:600;cursor:pointer;';
+        chooseBtn.addEventListener('click', () => {
+            let chosen = (pathInput.value || '/Downloads').trim();
+            if (!chosen.startsWith('/')) {
+                chosen = '/' + chosen;
+            }
+            overlay.remove();
+            cb(chosen);
+        });
+
+        footer.appendChild(cancelBtn);
+        footer.appendChild(chooseBtn);
+        modal.appendChild(titleEl);
+        modal.appendChild(pathInput);
+        modal.appendChild(listEl);
+        modal.appendChild(footer);
+        overlay.appendChild(modal);
+        overlay.addEventListener('click', (ev) => {
+            if (ev.target === overlay) {
+                overlay.remove();
+            }
+        });
+        document.body.appendChild(overlay);
+        await renderDir(activeDir);
     },
     getSettings(key, defaultValue = null, type = 2) {
         let url = helper.generateUrl("/apps/ncdownloader/getsettings");

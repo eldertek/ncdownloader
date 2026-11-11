@@ -2,48 +2,73 @@
 
 namespace OCA\NCDownloader\Aria2;
 
-//use Symfony\Component\Process\ExecutableFinder;
+use OCA\NCDownloader\Tools\Helper;
+use OCA\NCDownloader\Tools\UrlValidator;
 use Symfony\Component\Process\Exception\ProcessFailedException;
 use Symfony\Component\Process\Process;
-use OCA\NCDownloader\Tools\Helper;
 
 class Aria2
 {
-    //global Aria2 Config
-    private $config = [];
-    //extra Aria2 download options
-    private $options = array();
-    //optional token for authenticating with Aria2
-    private $token = null;
-    //the aria2 method being invoked
-    public $methodName = null;
-    //the aria2c binary path
-    private $bin = null;
-    // return the following items when getting downloads info by default
-    private $dataFilter = array(
-        'status', 'followedBy', 'totalLength', 'errorMessage', 'dir', 'uploadLength', 'completedLength', 'downloadSpeed', 'files', 'numSeeders', 'connections', 'gid', 'following', 'bittorrent',
-    );
-    //whether to filter the response returned by aria2
-    private $filterResponse = true;
-    //absolute download path
-    private $downloadDir;
-    //top-level aria2 configuration dir
-    private $confDir;
-    //aria2 session file
-    private $sessionFile;
-    //aria2 rpc url
-    private $rpcUrl;
-    //php binary path;
-    private $php;
-    //curl handle
-    private $ch;
-    //aria2 global options
-    private $onDownloadStart;
+    private array $config = [];
+    private array $options = [];
+    private ?string $token = null;
+    public ?string $methodName = null;
+    private ?string $bin = null;
+    private array $dataFilter = [
+        'status',
+        'followedBy',
+        'totalLength',
+        'errorMessage',
+        'dir',
+        'uploadLength',
+        'completedLength',
+        'downloadSpeed',
+        'files',
+        'numSeeders',
+        'connections',
+        'gid',
+        'following',
+        'bittorrent',
+    ];
+    private bool $filterResponse = true;
+    private string $downloadDir = '/tmp/Downloads';
+    private string $confDir = '/tmp/aria2';
+    private string $sessionFile = '';
+    private string $rpcUrl = '';
+    private ?string $php = null;
+    private $ch = null;
+    private ?string $onDownloadStart = null;
+    private ?string $content = null;
+    private string $torrentsDir = '/tmp/Torrents';
 
-    private $content;
-    private $torrentsDir;
-    public function __construct($options = array())
+    private function resolveBinaryPath(?string $binary): ?string
     {
+        if (!empty($binary)) {
+            if (@is_file($binary)) {
+                return $binary;
+            }
+            if ($resolved = Helper::findBinaryPath($binary)) {
+                return $resolved;
+            }
+            if (basename($binary) === 'aria2') {
+                if ($resolved = Helper::findBinaryPath('aria2c')) {
+                    return $resolved;
+                }
+            }
+        }
+        return Helper::findBinaryPath('aria2c', __DIR__ . '/../../bin/aria2c');
+    }
+
+    private function ensureBinaryPath(): void
+    {
+        if (empty($this->bin) || !@is_file($this->bin)) {
+            $this->bin = $this->resolveBinaryPath($this->bin);
+        }
+    }
+
+    public function __construct(array $options = [])
+    {
+        $appPath = Helper::getAppPath();
         $options += [
             'rpcHost' => '127.0.0.1',
             'rpcPort' => 6800,
@@ -51,311 +76,349 @@ class Aria2
             'torrentsDir' => '/tmp/Torrents',
             'token' => 'ncdownloader123',
             'confDir' => '/tmp/aria2',
-            //settings for each aria2 downloads
             'settings' => [],
-            //options wich which aria2c starts
-            'aria2Conf' => []
+            'aria2Conf' => [],
         ];
-        //set the hooks if no user-defined equivalents
-        $options["aria2Conf"] += [
-            'on-download-complete' => $_SERVER['DOCUMENT_ROOT'] . "/apps/ncdownloader/hooks/completeHook.sh",
-            'on-download-start' => $_SERVER['DOCUMENT_ROOT'] . "/apps/ncdownloader/hooks/startHook.sh",
+
+        $hooks = [
+            'on-download-complete' => $options['completeHook'] ?? ($appPath . '/hooks/completeHook.sh'),
+            'on-download-start' => $options['startHook'] ?? ($appPath . '/hooks/startHook.sh'),
+            'on-download-error' => $options['errorHook'] ?? ($appPath . '/hooks/errorHook.sh'),
         ];
-        //turn keys in $options into variables
-        extract($options);
-        if (!empty($binary)) {
-            $this->bin = $binary;
-        } else {
-            $this->bin = Helper::findBinaryPath('aria2c', __DIR__ . "/../../bin/aria2c");
+        foreach ($hooks as $hookFile) {
+            if (is_string($hookFile) && @is_file($hookFile) && !@is_executable($hookFile)) {
+                @chmod($hookFile, 0755);
+            }
         }
+        $options['aria2Conf'] = is_array($options['aria2Conf']) ? ($options['aria2Conf'] + $hooks) : $hooks;
+
+        $this->bin = $this->resolveBinaryPath(isset($options['binary']) ? (string) $options['binary'] : null);
         if ($this->isInstalled() && !$this->isExecutable()) {
-            chmod($this->bin, 0744);
+            @chmod((string) $this->bin, 0755);
         }
-        $this->confDir = $confDir;
+        $this->confDir = (string) $options['confDir'];
         $this->php = Helper::findBinaryPath('php');
-        $this->rpcUrl = sprintf("http://%s:%s/jsonrpc", $rpcHost, $rpcPort);
-        $this->sessionFile = $sessionFile ?? $this->confDir . "/aria2.session";
+        $this->rpcUrl = sprintf('http://%s:%s/jsonrpc', $options['rpcHost'], $options['rpcPort']);
+        $this->sessionFile = (string) ($options['sessionFile'] ?? ($this->confDir . '/aria2.session'));
         $this->configureGlobalAria2($options);
         $this->configureLocalAria2($options);
     }
-    public function init()
+
+    public function init(): void
     {
         $this->ch = curl_init($this->rpcUrl);
-        curl_setopt_array($this->ch, array(
+        curl_setopt_array($this->ch, [
             CURLOPT_POST => true,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_HEADER => false,
             CURLOPT_SSL_VERIFYPEER => false,
-        ));
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT => 15,
+        ]);
         $this->configure();
     }
 
-    private function configureLocalAria2(array $options)
+    private function configureLocalAria2(array $options): void
     {
-        $this->setDownloadDir($options["dir"]);
-        $this->setTorrentsDir($options["torrentsDir"]);
-        $this->setToken($options["token"]);
-        if (!empty($options["settings"])) {
-            foreach ($options["settings"] as $key => $value) {
-                $this->setOption($key, $value);
+        $this->setDownloadDir((string) $options['dir']);
+        $this->setTorrentsDir((string) $options['torrentsDir']);
+        $this->setToken((string) $options['token']);
+        if (!empty($options['settings']) && is_array($options['settings'])) {
+            foreach ($options['settings'] as $key => $value) {
+                $this->setOption((string) $key, $value);
             }
         }
     }
 
-    private function configureGlobalAria2(array $options)
+    private function configureGlobalAria2(array $options): void
     {
-        $runOptions = new RunOptions($options["aria2Conf"]);
+        $runOptions = new RunOptions(is_array($options['aria2Conf']) ? $options['aria2Conf'] : []);
+        $runOptions->add('--rpc-secret=' . $options['token']);
+        $runOptions->add('--rpc-listen-port=' . $options['rpcPort']);
+        $runOptions->add('--save-session=' . $this->sessionFile);
+        $runOptions->add('--input-file=' . $this->sessionFile);
+        $runOptions->add('--log=' . $this->confDir . '/aria2.log');
 
-        $runOptions->add("--rpc-secret=" . $options["token"]);
-        $runOptions->add("--rpc-listen-port=" . $options["rpcPort"]);
-        $runOptions->add("--save-session=" . $this->sessionFile);
-        $runOptions->add("--input-file=" . $this->sessionFile);
-        $runOptions->add("--log=" . $this->confDir . "/aria2.log");
-
-        //$this->logFile = $this->confDir . "/aria2.log";
         $this->config = $runOptions->getOptions();
     }
 
-    public function setonDownloadStart($path)
+    public function setonDownloadStart(string $path): void
     {
         $this->onDownloadStart = $path;
     }
 
-    public function reset()
+    public function reset(): void
     {
         $this->init();
     }
 
-    private function hasOption($key)
+    private function configure(): void
     {
-        return (bool) isset($this->options[$key]);
-    }
-
-    private function configure()
-    {
-        if ($this->confDir && !is_dir($this->confDir)) {
-            mkdir($this->confDir, 0755, true);
+        if ($this->confDir !== '' && !is_dir($this->confDir)) {
+            @mkdir($this->confDir, 0755, true);
         }
-        $dir = "";
-        if (($dir = $this->getDownloadDir()) && !is_dir($dir)) {
-            mkdir($dir, 0755, true);
+        $dir = $this->getDownloadDir();
+        if ($dir !== '' && !is_dir($dir)) {
+            @mkdir($dir, 0755, true);
         }
-        if (($dir = $this->getTorrentsDir()) && !is_dir($dir)) {
-            mkdir($dir, 0755, true);
+        $tDir = $this->getTorrentsDir();
+        if ($tDir !== '' && !is_dir($tDir)) {
+            @mkdir($tDir, 0755, true);
         }
         $this->followTorrent(true);
     }
-    public function setToken($token)
+
+    public function setToken(string $token): self
     {
         $this->token = "token:$token";
         return $this;
     }
-    public function setOption($key, $value)
+
+    public function setOption(string $key, $value): self
     {
         $this->options[$key] = $value;
         return $this;
     }
 
-    public function getOptions()
+    public function getOptions(): array
     {
         return $this->options;
     }
-    public function setTorrentsDir($dir)
+
+    public function setTorrentsDir(string $dir): self
     {
         $this->torrentsDir = $dir;
         return $this;
     }
+
     public function getTorrentsDir(): string
     {
         return $this->torrentsDir;
     }
-    public function setDownloadDir($dir)
+
+    public function setDownloadDir(string $dir): self
     {
         $this->setOption('dir', $dir);
         $this->downloadDir = $dir;
         return $this;
     }
+
     public function getDownloadDir(): string
     {
         return $this->downloadDir;
     }
-    public function setFileName($file)
+
+    public function setFileName(string $file): self
     {
-        $this->options['out'] = $file;
+        $safe = basename($file);
+        if ($safe !== '' && $safe !== '.' && $safe !== '..') {
+            $this->options['out'] = $safe;
+        }
         return $this;
     }
-    public function followTorrent($follow)
+
+    public function followTorrent(bool $follow): self
     {
-        $this->options['follow-torrent'] = $follow;
+        $this->options['follow-torrent'] = $follow ? 'true' : 'false';
         return $this;
     }
-    private function request($data)
+
+    private function request(array $data): ?array
     {
         $this->init();
-        $defaults = array(
+        $defaults = [
             'jsonrpc' => '2.0',
             'id' => 'ncdownloader',
             'method' => 'aria2.addUri',
             'params' => null,
-        );
+        ];
 
         $data += $defaults;
-        $this->content = json_encode($data);
-
-        if (isset($this->content)) {
-            curl_setopt($this->ch, CURLOPT_POSTFIELDS, $this->content);
-        }
+        $this->content = (string) json_encode($data);
+        curl_setopt($this->ch, CURLOPT_POSTFIELDS, $this->content);
         $resp = curl_exec($this->ch);
-        curl_close($this->ch);
-        return json_decode($resp, 1);
+        if (is_resource($this->ch) || $this->ch instanceof \CurlHandle) {
+            curl_close($this->ch);
+        }
+        if (!is_string($resp) || $resp === '') {
+            return null;
+        }
+        $decoded = json_decode($resp, true);
+        return is_array($decoded) ? $decoded : null;
     }
-    public function getFollowingGid($gid)
+
+    public function getFollowingGid(string $gid)
     {
         $data = $this->tellStatus($gid);
-        if (!is_array($data)) {
+        if (!is_array($data) || empty($data)) {
             return 0;
         }
-        $data = reset($data);
-        return ($data['following'] ?? 0);
+        $first = reset($data);
+        return is_array($first) ? ($first['following'] ?? 0) : 0;
     }
-    public function tellFail($range = [0, 999])
+
+    public function tellFail(array $range = [0, 999]): array
     {
         $this->filterResponse = false;
         $resp = $this->tellStopped($range);
-        if (!isset($resp['result'])) {
+        $this->filterResponse = true;
+        if (!is_array($resp) || !isset($resp['result']) || !is_array($resp['result'])) {
             return [];
         }
-        $result = $this->sortDownloadsResult($resp['result'], ['complete', 'removed']);
-        $this->filterResponse = true;
-        return $result;
+        return $this->sortDownloadsResult($resp['result'], ['complete', 'removed']);
     }
-    public function tellAll()
+
+    public function tellAll(): array
     {
         $this->filterResponse = false;
-        return array_merge($this->tellActive([]), $this->tellWaiting([0, 999]), $this->tellStopped([0, 999]));
+        $active = $this->tellActive([]) ?: [];
+        $waiting = $this->tellWaiting([0, 999]) ?: [];
+        $stopped = $this->tellStopped([0, 999]) ?: [];
+        $this->filterResponse = true;
+        return array_merge($active, $waiting, $stopped);
     }
-    public function __call($name, $args)
+
+    public function __call(string $name, array $args)
     {
         $this->methodName = $name;
 
-        $data = array();
-        if (isset($args[0]) && is_array($args[0]) && count($args) == 1 && strtolower($name) !== "adduri") {
+        if (isset($args[0]) && is_array($args[0]) && count($args) === 1 && strtolower($name) !== 'adduri') {
             $args = reset($args);
         }
         switch ($name) {
-            case "addUri":
-            case "addTorrent":
-                array_push($args, $this->options);
+            case 'addUri':
+            case 'addTorrent':
+                $args[] = $this->options;
                 break;
-            case "tellActive":
-            case "tellWaiting":
-            case "tellStopped":
-                array_push($args, $this->dataFilter);
-                break;
-            case "tellStatus":
-            case "getFiles":
-                array_push($args, $this->dataFilter);
+            case 'tellActive':
+            case 'tellWaiting':
+            case 'tellStopped':
+            case 'tellStatus':
+            case 'getFiles':
+                $args[] = $this->dataFilter;
                 break;
         }
-        if (isset($this->token)) {
+        if ($this->token !== null) {
             array_unshift($args, $this->token);
         }
-        $data = array('params' => $args, 'method' => 'aria2.' . $name);
+        $data = ['params' => $args, 'method' => 'aria2.' . $name];
         $rawResp = $this->request($data);
 
         if (!$this->filterResponse) {
             return $rawResp;
         }
-        return $this->parseResp($rawResp);
+        return $this->parseResp($rawResp ?? []);
     }
-    private function sortDownloadsResult($result, $statusFilter = null)
+
+    private function sortDownloadsResult(array $result, ?array $statusFilter = null): array
     {
         $data = [];
-        if (!isset($statusFilter)) {
+        if ($statusFilter === null) {
             $statusFilter = ['error'];
         }
         if (empty($result)) {
             return [];
         }
         foreach ($result as $info) {
-            $info = Helper::filterData($info);
-            if (isset($info['files'])) {
-                foreach ($info['files'] as $key => &$files) {
-                    $files = Helper::filterData($files, array('path', 'length'));
-                }
-            }
-            if (in_array($info['status'], $statusFilter)) {
+            if (!is_array($info)) {
                 continue;
             }
-            array_push($data, $info);
+            $info = Helper::filterData($info);
+            if (isset($info['files']) && is_array($info['files'])) {
+                foreach ($info['files'] as &$files) {
+                    $files = Helper::filterData($files, ['path', 'length']);
+                }
+                unset($files);
+            }
+            if (isset($info['status']) && in_array($info['status'], $statusFilter, true)) {
+                continue;
+            }
+            $data[] = $info;
         }
         return $data;
     }
-    public function parseResp($resp = array())
+
+    public function parseResp(?array $resp = null): array
     {
-        $data = array();
-        if (isset($resp['error']) && isset($resp['error']['message'])) {
+        $resp = $resp ?? [];
+        $data = [];
+        if (isset($resp['error']['message'])) {
             $data['error'] = $resp['error']['message'];
             return $data;
         }
         $result = $resp['result'] ?? null;
-        if (!isset($result)) {
+        if ($result === null) {
             return $data;
         }
-        if ($this->methodName === 'tellStatus' && isset($result['files'])) {
-            foreach ($result['files'] as $key => &$files) {
-                $files = Helper::filterData($files, array('path', 'length'));
+        if ($this->methodName === 'tellStatus' && is_array($result) && isset($result['files'])) {
+            foreach ($result['files'] as &$files) {
+                $files = Helper::filterData($files, ['path', 'length']);
             }
-            array_push($data, $result);
+            unset($files);
+            $data[] = $result;
             return $data;
         }
-        // parse response for tellActive,tellWaiting,and tellStopped
-        if (strpos($this->methodName, "tell") !== false && is_array($result)) {
+        if ($this->methodName !== null && str_contains($this->methodName, 'tell') && is_array($result)) {
             return $this->sortDownloadsResult($result);
         }
         return $resp;
     }
-    public function getStatus($gid)
+
+    public function getStatus(string $gid)
     {
         return $this->tellStatus($gid);
     }
 
-    public function download(String $url)
+    public function download(string $url)
     {
-        $resp = $this->addUri([$url]);
-
-        if (isset($resp['error'])) {
-            return $resp;
+        $validation = UrlValidator::validate($url, ['http', 'https', 'ftp', 'ftps', 'magnet']);
+        if (!$validation['valid']) {
+            return ['error' => $validation['error'] ?? 'Invalid URL'];
         }
 
-        if (isset($resp['result']) && is_string($gid = $resp['result'])) {
+        if (!$this->isRunning() && $this->isInstalled() && $this->isExecutable()) {
+            $this->start();
+            usleep(300000);
+        }
+
+        $resp = $this->addUri([$url]);
+        if (is_array($resp) && isset($resp['error'])) {
+            return $resp;
+        }
+        if (is_array($resp) && isset($resp['result']) && is_string($gid = $resp['result'])) {
             return $gid;
         }
-
         return false;
     }
 
-    public function btDownload($file)
+    public function btDownload(string $file)
     {
-        if ($data = file_get_contents($file)) {
-            $filename = Helper::getBasicFilename($file);
-            $torrent = base64_encode($data);
-            $resp = $this->addTorrent($torrent, []);
-        } else {
-            return ['error' => "no valid torrents file!"];
+        if (!@is_file($file)) {
+            return ['error' => 'no valid torrents file!'];
         }
-        if (isset($resp['error'])) {
+        $data = @file_get_contents($file);
+        if ($data === false || $data === '') {
+            return ['error' => 'no valid torrents file!'];
+        }
+
+        if (!$this->isRunning() && $this->isInstalled() && $this->isExecutable()) {
+            $this->start();
+            usleep(300000);
+        }
+
+        $filename = Helper::getBasicFilename($file);
+        $torrent = base64_encode($data);
+        $resp = $this->addTorrent($torrent, []);
+        if (is_array($resp) && isset($resp['error'])) {
             return $resp;
         }
-
-        if (isset($resp['result']) && is_string($gid = $resp['result'])) {
+        if (is_array($resp) && isset($resp['result']) && is_string($gid = $resp['result'])) {
             return ['gid' => $gid, 'filename' => $filename];
         }
-
         return false;
     }
 
-    public function restart()
+    public function restart(): void
     {
         $this->stop();
         $this->start();
@@ -364,62 +427,73 @@ class Aria2
     public function stop()
     {
         $resp = $this->shutdown();
-        sleep(3);
-        return $resp ?? null;
+        sleep(2);
+        return $resp ?: null;
     }
 
-    public function start($bin = null)
+    public function start(?string $bin = null): array
     {
-        //aria2c refuses to start with no errors when input-file is set but missing
+        $this->ensureBinaryPath();
+        if (empty($this->bin) || !@is_file($this->bin)) {
+            return ['status' => false, 'error' => 'aria2c binary not found'];
+        }
+        if ($this->confDir !== '' && !is_dir($this->confDir)) {
+            @mkdir($this->confDir, 0755, true);
+        }
         if (!file_exists($this->sessionFile)) {
-            file_put_contents($this->sessionFile, '');
+            @file_put_contents($this->sessionFile, '');
         }
 
-        //$process = new Process([$this->bin, "--conf-path=" . $this->confFile]);
-        array_unshift($this->config, $this->bin);
-        $process = new Process($this->config);
+        $cmd = array_merge([$this->bin], $this->config);
+        $process = new Process($cmd);
         try {
             $process->mustRun();
-            $output = $process->getOutput();
         } catch (ProcessFailedException $exception) {
-            $error = $exception->getMessage();
+            return ['status' => false, 'error' => $exception->getMessage()];
         }
-        $resp = [];
-        if (isset($error)) {
-            $resp['error'] = $error;
-            $resp['status'] = false;
-        } else {
-            $resp['status'] = true;
-        }
-        return $resp;
-    }
-    public function isInstalled()
-    {
-        return @is_file($this->bin);
-    }
-    public function isExecutable()
-    {
-        return @is_executable($this->bin);
+        return ['status' => true];
     }
 
-    public function isRunning()
+    public function isInstalled(): bool
+    {
+        $this->ensureBinaryPath();
+        return !empty($this->bin) && @is_file($this->bin);
+    }
+
+    public function isExecutable(): bool
+    {
+        $this->ensureBinaryPath();
+        return !empty($this->bin) && @is_executable($this->bin);
+    }
+
+    public function isRunning(): bool
     {
         $resp = $this->getSessionInfo();
-        return (bool) $resp;
+        return is_array($resp) && isset($resp['result']);
     }
 
-    public function getBin()
+    public function getBin(): ?string
     {
+        $this->ensureBinaryPath();
         return $this->bin;
     }
-    public function version()
+
+    public function version(): ?string
     {
         $resp = $this->getVersion();
-        return $resp['result']['version'] ?? null;
-    }
-    public function install()
-    {
-        $url = "https://github.com/shiningw/ncdownloader-bin/raw/master/aria2c";
-        Helper::Download($url, $this->bin);
+        if (is_array($resp) && isset($resp['result']['version'])) {
+            return (string) $resp['result']['version'];
+        }
+        if ($this->isInstalled() && $this->isExecutable()) {
+            $proc = new Process([(string) $this->bin, '--version']);
+            $proc->run();
+            if ($proc->isSuccessful()) {
+                $firstLine = strtok(trim($proc->getOutput()), "\r\n");
+                if (is_string($firstLine) && preg_match('/([0-9]+\.[0-9]+(?:\.[0-9]+)?)/', $firstLine, $m)) {
+                    return $m[1];
+                }
+            }
+        }
+        return null;
     }
 }

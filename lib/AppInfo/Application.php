@@ -3,40 +3,60 @@
 namespace OCA\NCDownloader\AppInfo;
 
 use OCA\NCDownloader\Aria2\Aria2;
+use OCA\NCDownloader\Db\Settings;
 use OCA\NCDownloader\Http\Client;
 use OCA\NCDownloader\Tools\Helper;
-use OCA\NCDownloader\Db\Settings;
 use OCA\NCDownloader\Ytdl\Ytdl;
 use OCP\AppFramework\App;
-use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IBootContext;
+use OCP\AppFramework\Bootstrap\IBootstrap;
 use OCP\AppFramework\Bootstrap\IRegistrationContext;
-use Symfony\Component\DomCrawler\Crawler;
+use OCP\IUserSession;
 use Psr\Container\ContainerInterface;
+use Symfony\Component\DomCrawler\Crawler;
 
 class Application extends App implements IBootstrap
 {
-    public function __construct(array $urlParams = array())
+    public const APP_ID = 'ncdownloader';
+
+    public function __construct(array $urlParams = [])
     {
-        parent::__construct('ncdownloader', $urlParams);
+        parent::__construct(self::APP_ID, $urlParams);
     }
+
     public function register(IRegistrationContext $context): void
     {
         $context->registerService(Client::class, function () {
-            $options = [
-                'ipv4' => true,
-            ];
-            return Client::create($options);
+            return Client::create(['ipv4' => true]);
         });
         $context->registerService(Crawler::class, function () {
             return new Crawler();
         });
+        $context->registerService('uid', function (ContainerInterface $c): string {
+            $user = $c->get(IUserSession::class)->getUser();
+            return $user ? $user->getUID() : '';
+        });
+        $context->registerService(Aria2::class, function (ContainerInterface $c): Aria2 {
+            $user = $c->get(IUserSession::class)->getUser();
+            $uid = $user ? $user->getUID() : '';
+            return new Aria2(Helper::getAria2Config($uid));
+        });
+        $context->registerService(Ytdl::class, function (ContainerInterface $c): Ytdl {
+            $user = $c->get(IUserSession::class)->getUser();
+            $uid = $user ? $user->getUID() : '';
+            return new Ytdl(Helper::getYtdlConfig($uid));
+        });
+        $context->registerService(Settings::class, function (ContainerInterface $c): Settings {
+            $user = $c->get(IUserSession::class)->getUser();
+            $uid = $user ? $user->getUID() : '';
+            return new Settings($uid);
+        });
+
         $sites = Helper::getSearchSites();
         foreach ($sites as $site) {
-            //fully qualified class name
             $className = $site['class'];
             $context->registerService($className, function (ContainerInterface $container) use ($className) {
-                $crawler = $container->get(Crawler::class);
+                $crawler = new Crawler();
                 $client = $container->get(Client::class);
                 return $className::create($crawler, $client);
             });
@@ -45,27 +65,5 @@ class Application extends App implements IBootstrap
 
     public function boot(IBootContext $c): void
     {
-        $user = Helper::getUser();
-        $uid = ($user) ? $user->getUID() : '';
-        //$settings = new Settings($uid);
-        //$userFolder = Helper::getUserFolder($uid);
-        $context = $c->getAppContainer();
-
-        $context->registerService(Aria2::class, function (ContainerInterface $c) use ($uid) {
-            $config = Helper::getAria2Config($uid);
-            return new Aria2($config);
-        });
-        $context->registerService(Ytdl::class, function (ContainerInterface $c) use ($uid) {
-            $config = Helper::getYtdlConfig($uid);
-            return new Ytdl($config);
-        });
-
-        $context->registerService(Settings::class, function (ContainerInterface $c) use ($uid) {
-            return new Settings($uid);
-        });
-        $context->registerService('uid', function (ContainerInterface $c) use ($uid) {
-            return $uid;
-        });
-        //$context->injectFn([$this, 'registerSearchProviders']);
     }
 }

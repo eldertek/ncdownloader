@@ -1,54 +1,89 @@
 <?php
 
+declare(strict_types=1);
+
 namespace OCA\NCDownloader\Http;
 
-//require __DIR__ . "/../../vendor/autoload.php";
-use Symfony\Component\HttpClient\HttpClient;
+use OCA\NCDownloader\Tools\UrlValidator;
+use OCP\Http\Client\IClient;
+use OCP\Http\Client\IClientService;
 
 final class Client
 {
-    private $client;
-    public function __construct(?array $options = [])
+    private IClient $client;
+    private array $defaultOptions;
+
+    public function __construct(?array $options = null)
     {
-        $this->client = HttpClient::create($this->configure($options));
+        /** @var IClientService $clientService */
+        $clientService = \OC::$server->get(IClientService::class);
+        $this->client = $clientService->newClient();
+        $this->defaultOptions = $this->configure($options ?? []);
     }
 
-    public static function create(?array $options =[])
+    public static function create(?array $options = null): self
     {
         return new self($options);
     }
 
     private function defaultUserAgent(): string
     {
-        return "Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36";
-    }
-
-    private function defaultOptions(): array
-    {
-        $settings = [
-            'headers' => [],
-            'extra' => ['curl' => null],
-        ];
-        return $settings;
+        return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
     }
 
     private function configure(array $options): array
     {
+        $headers = $options['headers'] ?? [];
+        $headers['User-Agent'] = $options['useragent'] ?? ($headers['User-Agent'] ?? $this->defaultUserAgent());
 
-        extract($options);
-        $settings = $this->defaultOptions();
-        $settings['extra']['curl'] = $curl ?? [];
-        $settings['headers'] = $headers ?? [];
+        $settings = [
+            'headers' => $headers,
+            'timeout' => (int) ($options['timeout'] ?? 20),
+            'connect_timeout' => (int) ($options['connect_timeout'] ?? 10),
+            'nextcloud' => [
+                'allow_local_address' => false,
+            ],
+        ];
 
-        if ($ipv4 || $force_ipv4) {
-            $settings['extra']['curl'] = [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4];
+        if (isset($options['max_redirects'])) {
+            $settings['allow_redirects'] = [
+                'max' => (int) $options['max_redirects'],
+            ];
         }
-        $settings['headers']['User-Agent'] = $useragent ?? $this->defaultUserAgent();
+
+        if (!empty($options['ipv4']) || !empty($options['force_ipv4'])) {
+            if (defined('CURLOPT_IPRESOLVE') && defined('CURL_IPRESOLVE_V4')) {
+                $settings['curl'] = [CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4];
+            }
+        }
 
         return $settings;
     }
-    public function request(string $url, $method, ?array $options = [])
+
+    public function request(string $method, string $url, ?array $options = null): Response
     {
-        return $this->client->request($url, $method, $options);
+        $check = UrlValidator::validate($url, ['http', 'https']);
+        if (!$check['valid']) {
+            throw new \InvalidArgumentException($check['error'] ?? 'Invalid URL');
+        }
+
+        $reqOptions = array_replace_recursive($this->defaultOptions, $options ?? []);
+        $reqOptions['nextcloud']['allow_local_address'] = false;
+
+        $upperMethod = strtoupper(trim($method));
+        if ($upperMethod === 'POST') {
+            $resp = $this->client->post($url, $reqOptions);
+        } elseif ($upperMethod === 'HEAD') {
+            $resp = $this->client->head($url, $reqOptions);
+        } else {
+            $resp = $this->client->get($url, $reqOptions);
+        }
+
+        $body = $resp->getBody();
+        if (is_resource($body)) {
+            $body = (string) stream_get_contents($body);
+        }
+
+        return new Response($resp->getStatusCode(), (string) ($body ?? ''));
     }
 }

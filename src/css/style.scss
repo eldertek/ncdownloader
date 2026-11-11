@@ -7,16 +7,33 @@
     padding-left: 4%;
 }
 
+.ncd-mobile-bar {
+    display: none;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-border, #e2e8f0);
+}
+
+.ncd-mobile-nav-btn {
+    background-color: var(--color-background-dark, #e5e7eb);
+    color: var(--color-main-text, #181616);
+    border: 1px solid var(--color-border, #cbd5e1);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
 #app-ncdownloader-wrapper {
     width: 100%;
     display: flex;
+    min-height: calc(100vh - var(--header-height, 50px));
 
     .action-item {
         position: relative;
     }
 
     a {
-        color          : #337ab7;
+        color: var(--color-primary-element, #337ab7);
         text-decoration: none;
     }
 
@@ -47,49 +64,40 @@
     .icon-add {
         background-image: url('../../img/add.svg');
     }
+
     .icon-clipboard {
         background-image: url('../../img/clippy.svg');
     }
+
     #ncdownloader-form-wrapper {
         margin-left: 2px;
 
         .form-input-wrapper {
-            display  : flex;
+            display: flex;
             flex-flow: row nowrap;
-
-            select input {
-                justify-content: left;
-            }
         }
     }
 
     a:hover,
     a:focus {
-        color          : #23527c;
         text-decoration: underline;
     }
 
-    a:focus {
-        outline       : 5px auto -webkit-focus-ring-color;
-        outline-offset: -2px;
-    }
-
     div .number {
-        background   : none repeat scroll 0 0 #5f5853;
+        background: none repeat scroll 0 0 var(--color-primary-element, #5f5853);
         border-radius: 999px;
-        color        : #FFFFFF;
-        display      : inline-block;
-        font-size    : 15px;
-        font-style   : italic;
-        height       : 20px;
-        line-height  : 20px;
-        margin-right : 10px;
-        padding      : 0 8px;
+        color: var(--color-primary-element-text, #FFFFFF);
+        display: inline-block;
+        font-size: 13px;
+        height: 20px;
+        line-height: 20px;
+        margin-right: 10px;
+        padding: 0 8px;
     }
 
     #ncdownloader-form-wrapper input[type=text] {
-        padding: 0px 5px;
-        flex   : auto;
+        padding: 0 8px;
+        flex: auto;
     }
 
     #ncdownloader-table-data .table-cell {
@@ -100,29 +108,34 @@
         position: relative;
 
         .action-link-item a:hover {
-            background-color: #c2afaf;
+            background-color: var(--color-background-hover, #c2afaf);
         }
 
         ul {
-            background-color: #ededed;
+            background-color: var(--color-main-background, #ededed);
         }
     }
 
     .action-links {
-        /*visibility: hidden;*/
-        display         : none;
-        position        : absolute;
-        background-color: #f1f1f1;
-        min-width       : 60px;
-        box-shadow      : 0px 8px 16px 0px rgba(0, 0, 0, 0.2);
-        z-index         : 9999;
+        display: none;
+        position: absolute;
+        background-color: var(--color-main-background, #f1f1f1);
+        min-width: 60px;
+        box-shadow: 0 8px 16px 0 rgba(0, 0, 0, 0.2);
+        z-index: 9999;
     }
 
     .action-link-item a {
-        color          : black;
-        padding        : 6px 6px;
+        color: var(--color-main-text, #000000);
+        padding: 6px;
         text-decoration: none;
-        display        : block;
+        display: block;
+    }
+
+    #app-content {
+        flex: 1 1 auto;
+        min-width: 0;
+        padding: 12px 16px;
     }
 
     .ncdownloader-body-wrapper,
@@ -136,9 +149,8 @@
     }
 
     #app-content-wrapper #ncdownloader-table-content .table-cell {
-        border-bottom: 1px solid #9d9595;
-        border-left  : 1px solid #eee;
-
+        border-bottom: 1px solid var(--color-border, #9d9595);
+        border-left: 1px solid var(--color-border, #eee);
     }
 
     #app-content-wrapper {
@@ -146,51 +158,65 @@
     }
 
     .app-navigation-entry-bullet {
-        background-color: rgb(80, 80, 173);
+        background-color: var(--color-primary-element, rgb(80, 80, 173));
     }
 
     .notinstalled {
-        color: rgb(236, 9, 9);
+        color: var(--color-error, rgb(236, 9, 9));
     }
 
     .checkboxes label {
-        display      : inline-block;
+        display: inline-block;
         padding-right: 10px;
-        white-space  : nowrap;
+        white-space: nowrap;
     }
 
-    .checkboxes input {
-        vertical-align: middle;
-    }
-
+    .checkboxes input,
     .checkboxes label span {
         vertical-align: middle;
     }
 
-    &>#app-navigation:not(.vue)>ul>li>a {
+    & > #app-navigation:not(.vue) > ul > li > a {
         padding: 0 12px 0 44px;
     }
 
     .button-container [class^='icon-'],
     .button-container [class*=' icon-'] {
-        background-repeat  : no-repeat;
+        background-repeat: no-repeat;
         background-position: center;
-        /* min-width       : 18px; */
-        min-height         : 24px;
+        min-height: 24px;
     }
-
 }
 
 #ncdownloader-settings-form input[type=text] {
     width: 160px;
 }
 
-@media only screen and (min-width: 800px) {}
-
 @media only screen and (max-width: 1024px) {
+    .ncd-mobile-bar {
+        display: flex;
+        align-items: center;
+    }
+
+    #app-ncdownloader-wrapper > #app-navigation:not(.vue) {
+        position: fixed;
+        top: var(--header-height, 50px);
+        left: 0;
+        bottom: 0;
+        transform: translateX(-105%);
+        transition: transform 0.2s ease-in-out;
+        box-shadow: 4px 0 16px rgba(0, 0, 0, 0.2);
+        background-color: var(--color-main-background, #ffffff);
+        z-index: 1500;
+    }
+
+    #app-ncdownloader-wrapper > #app-navigation.ncd-nav-open:not(.vue) {
+        transform: translateX(0);
+    }
+
     #ncdownloader-body-wrapper {
-        position  : relative;
-        margin-top: 2em;
+        position: relative;
+        margin-top: 0.75em;
     }
 
     #ncdownloader-settings-form input[type=text] {

@@ -27,11 +27,12 @@ export default {
   input {
     width: 100%;
     height: 100%;
-    margin: 0px;
-    background-color: $bg-color;
+    min-height: 40px;
+    margin: 0;
+    background-color: var(--color-main-background, $bg-color);
     font-size: medium;
-    color: #181616;
-    border-radius: 0em;
+    color: var(--color-main-text, #181616);
+    border-radius: 0;
   }
 }
 @media only screen and (max-width: 1024px) {
@@ -41,9 +42,8 @@ export default {
       width: 100%;
     }
     & > input:focus {
-      border-color: #86b7fe;
+      border-color: var(--color-primary-element, #86b7fe);
       outline: 0;
-      box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
     }
   }
 }

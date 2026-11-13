@@ -38,3 +38,8 @@ npm run build
 ### Repository
 
 https://github.com/eldertek/ncdownloader
+
+## Commercial Support & Custom Integration
+
+Need custom features, enterprise integration, or priority support?
+Maintained by **[Eclipse Technology](https://eclipse-technology.eu)** ([contact@eclipse-technology.eu](mailto:contact@eclipse-technology.eu)).
